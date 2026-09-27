@@ -176,81 +176,109 @@ local function restoreCharacter(char)
 	backups[char] = nil
 end
 
+local outfitBusy = {}
+local applyRigToChar
 local function outfit(char, userId)
 	generations[char] = (generations[char] or 0) + 1
 	local generation = generations[char]
 	restoreCharacter(char)
 	if not userId then return end
+	local rig = rigs[userId]
+	if rig then applyRigToChar(char, rig, generation); return end
+	if outfitBusy[userId] then
+		if running then notify("Avatar is still loading, please wait...") end
+		return
+	end
+	outfitBusy[userId] = true
+	if running then notify("Loading avatar " .. tostring(userId) .. "...") end
 	task.spawn(function()
-		local rig = rigs[userId]
-		if not rig then
-			local ok, value = pcall(function()
-				return Players:CreateHumanoidModelFromUserId(userId)
-			end)
-			if not ok then if running then notify("Avatar preview unavailable: " .. tostring(value)) end; return end
-			rig = value
-			if not running then pcall(function() rig:Destroy() end); return end
-			if rigs[userId] then pcall(function() rig:Destroy() end); rig = rigs[userId] else rigs[userId] = rig end
+		local fetched = nil
+		local th
+		th = task.spawn(function()
+			local ok, value = pcall(function() return Players:CreateHumanoidModelFromUserId(userId) end)
+			if ok then fetched = value end
+		end)
+		local ticks = 0
+		local TIMEOUT = 80
+		while not fetched and running do
+			task.wait(0.1)
+			ticks = ticks + 1
+			if ticks > TIMEOUT then break end
 		end
-		if not running or not char.Parent or generations[char] ~= generation then return end
-		task.wait()
-		local saved = { removed = {}, added = {}, colors = {} }
-		backups[char] = saved
-		for _, obj in ipairs(char:GetChildren()) do
-			if clothing(obj) then saved.removed[#saved.removed + 1] = { object = obj, parent = char }; obj.Parent = nil end
-			if obj:IsA("BasePart") then saved.colors[obj] = obj.Color end
+		outfitBusy[userId] = nil
+		if not fetched then
+			if th then pcall(function() task.cancel(th) end) end
+			if running then notify("Avatar load took too long, cancelled. Try again.") end
+			return
 		end
-		local head = char:FindFirstChild("Head") or char:FindFirstChild("HitboxHead")
-		local sourceHead = rig:FindFirstChild("Head")
-		if head and sourceHead then
-			for _, obj in ipairs(head:GetChildren()) do
-				if obj:IsA("Decal") or obj:IsA("SurfaceAppearance") or obj:IsA("SpecialMesh") or obj:IsA("Texture") then
-					saved.removed[#saved.removed + 1] = { object = obj, parent = head }; obj.Parent = nil
-				end
+		rig = fetched
+		if not running then pcall(function() rig:Destroy() end); return end
+		if rigs[userId] then pcall(function() rig:Destroy() end); rig = rigs[userId] else rigs[userId] = rig end
+		applyRigToChar(char, rig, generation)
+	end)
+end
+
+applyRigToChar = function(char, rig, generation)
+	if not running or not char.Parent or generations[char] ~= generation then return end
+	task.wait()
+	local saved = { removed = {}, added = {}, colors = {} }
+	backups[char] = saved
+	for _, obj in ipairs(char:GetChildren()) do
+		if clothing(obj) then saved.removed[#saved.removed + 1] = { object = obj, parent = char }; obj.Parent = nil end
+		if obj:IsA("BasePart") then saved.colors[obj] = obj.Color end
+	end
+	local head = char:FindFirstChild("Head") or char:FindFirstChild("HitboxHead")
+	local sourceHead = rig:FindFirstChild("Head")
+	if head and sourceHead then
+		for _, obj in ipairs(head:GetChildren()) do
+			if obj:IsA("Decal") or obj:IsA("SurfaceAppearance") or obj:IsA("SpecialMesh") or obj:IsA("Texture") then
+				saved.removed[#saved.removed + 1] = { object = obj, parent = head }; obj.Parent = nil
 			end
 		end
-		for _, obj in ipairs(rig:GetChildren()) do
-			if clothing(obj) then
-				local copy = obj:Clone()
-				for _, part in ipairs(copy:GetDescendants()) do
-					if part:IsA("BasePart") then part.CanCollide = false; part.Massless = true end
-				end
-				copy.Parent = char
-				saved.added[#saved.added + 1] = copy
-				if copy:IsA("Accessory") then
-					local handle = copy:FindFirstChild("Handle")
-					if handle then
-						local old = handle:FindFirstChild("AccessoryWeld"); if old then old:Destroy() end
-						local attachment = handle:FindFirstChildOfClass("Attachment")
-						local target = attachment and char:FindFirstChild(attachment.Name, true)
-						if target and target:IsDescendantOf(copy) then target = nil end
-						if not target and attachment then
-							for _, part in ipairs(char:GetChildren()) do
-								if part:IsA("BasePart") then target = part:FindFirstChild(attachment.Name); if target then break end end
-							end
+	end
+	for _, obj in ipairs(rig:GetChildren()) do
+		if clothing(obj) then
+			local copy = obj:Clone()
+			for _, part in ipairs(copy:GetDescendants()) do
+				if part:IsA("BasePart") then part.CanCollide = false; part.Massless = true end
+			end
+			copy.Parent = char
+			saved.added[#saved.added + 1] = copy
+			if copy:IsA("Accessory") then
+				local handle = copy:FindFirstChild("Handle")
+				if handle then
+					local old = handle:FindFirstChild("AccessoryWeld"); if old then old:Destroy() end
+					local attachment = handle:FindFirstChildOfClass("Attachment")
+					local target = attachment and char:FindFirstChild(attachment.Name, true)
+					if target and target:IsDescendantOf(copy) then target = nil end
+					if not target and attachment then
+						for _, part in ipairs(char:GetChildren()) do
+							if part:IsA("BasePart") then target = part:FindFirstChild(attachment.Name); if target then break end end
 						end
-						if target and not target:IsA("Attachment") then target = nil end
-						if target or head then
-							local weld = Instance.new("Weld")
-							weld.Part0 = handle
-							weld.Part1 = target and target.Parent or head
-							weld.C0 = attachment and attachment.CFrame or copy.AttachmentPoint
-							weld.C1 = target and target.CFrame or CFrame.new(0, 0.5, 0)
-							weld.Parent = handle
-						end
+					end
+					if target and not target:IsA("Attachment") then target = nil end
+					if target or head then
+						local weld = Instance.new("Weld")
+						weld.Part0 = handle
+						weld.Part1 = target and target.Parent or head
+						weld.C0 = attachment and attachment.CFrame or copy.AttachmentPoint
+						weld.C1 = target and target.CFrame or CFrame.new(0, 0.5, 0)
+						weld.Parent = handle
 					end
 				end
 			end
 		end
-		if head and sourceHead then
-			for _, obj in ipairs(sourceHead:GetChildren()) do
-				if obj:IsA("Decal") or obj:IsA("SurfaceAppearance") or obj:IsA("SpecialMesh") or obj:IsA("Texture") then
-					local copy = obj:Clone(); copy.Parent = head; saved.added[#saved.added + 1] = copy
-				end
+	end
+	if head and sourceHead then
+		for _, obj in ipairs(sourceHead:GetChildren()) do
+			if obj:IsA("Decal") or obj:IsA("SurfaceAppearance") or obj:IsA("SpecialMesh") or obj:IsA("Texture") then
+				local copy = obj:Clone(); copy.Parent = head; saved.added[#saved.added + 1] = copy
 			end
 		end
-	end)
+	end
 end
+
+
 
 SpooferLeft:AddLabel("Copies clothing, accessories and face; keeps body geometry.", true)
 SpooferLeft:AddInput("ExtraAvatarUserId", { Text = "Avatar user ID", Default = tostring(lp.UserId), Numeric = true, Finished = true, Callback = function(v)
