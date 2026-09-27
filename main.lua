@@ -278,65 +278,86 @@ applyRigToChar = function(char, rig, generation)
 	end
 end
 
-local descBusy = {}
-local function applyHeadViaDescription(char, userId)
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	if not hum then
-		if running then notify("ApplyDescription unavailable: no Humanoid found.") end
-		return
-	end
-	if descBusy[userId] then return end
-	descBusy[userId] = true
-	if running then notify("Applying head via HumanoidDescription...") end
+local headSwapBusy = {}
+local headBackups = {}
+local function swapHead(char, userId)
+	if not char or not char.Parent then return end
+	if headSwapBusy[userId] then return end
+	headSwapBusy[userId] = true
+	if running then notify("Loading head...") end
 	task.spawn(function()
-		local target = nil
-		local th = task.spawn(function()
-			local ok, v = pcall(function() return Players:GetHumanoidDescriptionFromUserId(userId) end)
-			if ok then target = v end
-		end)
-		local ticks, TIMEOUT = 0, 80
-		while not target and running do
-			task.wait(0.1)
-			ticks = ticks + 1
-			if ticks > TIMEOUT then break end
-		end
-		descBusy[userId] = nil
-		if not target then
-			if th then pcall(function() task.cancel(th) end) end
-			if running then notify("Head fetch took too long, cancelled.") end
-			return
-		end
-		if not running or not char.Parent then return end
-		local ok = pcall(function()
-			local mine = hum:GetAppliedDescription()
-			local new = Instance.new("HumanoidDescription")
-			local fields = {
-				"BackAccessory","Face","FaceAccessory","FrontAccessory","GraphicTShirt",
-				"HairAccessory","HatAccessory","NeckAccessory","Pants","Shirt",
-				"ShouldersAccessory","WaistAccessory","ClimbAnimation","FallAnimation",
-				"IdleAnimation","JumpAnimation","RunAnimation","SwimAnimation","WalkAnimation",
-				"DepthScale","HeightScale","WidthScale","BodyTypeScale","ProportionScale",
-			}
-			for _, f in ipairs(fields) do
-				local okk, v = pcall(function() return mine[f] end)
-				if okk and v ~= nil then pcall(function() new[f] = v end) end
+		local rig = rigs[userId]
+		if not rig then
+			local fetched = nil
+			local th = task.spawn(function()
+				local ok, v = pcall(function() return Players:CreateHumanoidModelFromUserId(userId) end)
+				if ok then fetched = v end
+			end)
+			local t, TO = 0, 80
+			while not fetched and running do task.wait(0.1); t = t + 1; if t > TO then break end end
+			if not fetched then
+				if th then pcall(function() task.cancel(th) end) end
+				headSwapBusy[userId] = nil
+				if running then notify("Head load took too long, cancelled.") end
+				return
 			end
-			-- Override only the head from the target
-			if target.Head then new.Head = target.Head end
-			-- Dynamic heads sometimes assume the target's head scale; try it
-			local _, hs = pcall(function() return nil, target.HeadScale end)
-			if hs ~= nil then pcall(function() new.HeadScale = hs end) end
-			hum:ApplyDescription(new)
-		end)
-		if not ok then
-			if running then notify("ApplyDescription failed or is blocked in this game.") end
-			return
+			rig = fetched
+			if rigs[userId] then pcall(function() rig:Destroy() end); rig = rigs[userId] else rigs[userId] = rig end
 		end
+		if not running or not char.Parent then headSwapBusy[userId] = nil; return end
+		local sourceHead = rig:FindFirstChild("Head")
+		local oldHead = char:FindFirstChild("Head") or char:FindFirstChild("HitboxHead")
+		if not sourceHead or not oldHead then headSwapBusy[userId] = nil; return end
+		local neckJoint = nil
+		for _, d in ipairs(char:GetDescendants()) do
+			if d.Name == "Neck" and d:IsA("Motor6D") then neckJoint = d; break end
+		end
+		local newHead = sourceHead:Clone()
+		newHead.Name = oldHead.Name
+		for _, d in ipairs(newHead:GetDescendants()) do
+			if d:IsA("Motor6D") or d.Name == "Neck" then pcall(function() d:Destroy() end) end
+		end
+		newHead.Anchored = oldHead.Anchored
+		newHead.CanCollide = oldHead.CanCollide
+		pcall(function() newHead.CFrame = oldHead.CFrame end)
+		local weldTo = nil
+		if neckJoint then weldTo = neckJoint.Part0 end
+		if not weldTo or weldTo == oldHead then weldTo = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") end
+		newHead.Parent = char
+		pcall(function() oldHead.Parent = nil end)
+		if weldTo and newHead:IsA("BasePart") then
+			pcall(function()
+				local w = Instance.new("Weld")
+				w.Name = "Neck"
+				w.Part0 = weldTo
+				w.Part1 = newHead
+				w.C0 = neckJoint and neckJoint.C0 or CFrame.new(0, 1, 0)
+				w.C1 = neckJoint and neckJoint.C1 or CFrame.new(0, -0.5, 0)
+				w.Parent = newHead
+			end)
+		end
+		headBackups[char] = { head = oldHead }
+		headSwapBusy[userId] = nil
 		if running and cfg.avatar and char.Parent then
-			task.wait(0.3)
+			task.wait(0.2)
 			outfit(char, cfg.userId)
 		end
+		if running then notify("Head swapped.") end
 	end)
+end
+
+local function restoreHead(char)
+	local bk = headBackups[char]
+	if not bk then return end
+	if char.Parent and bk.head then
+		for _, d in ipairs(char:GetChildren()) do
+			if (d.Name == "Head" or d.Name == "HitboxHead") and d ~= bk.head then
+				pcall(function() d.Parent = nil end)
+			end
+		end
+		pcall(function() bk.head.Parent = char end)
+	end
+	headBackups[char] = nil
 end
 
 
@@ -357,17 +378,19 @@ SpooferLeft:AddToggle("ExtraAvatarEnabled", { Text = "Enable local outfit", Defa
 end })
 SpooferLeft:AddDivider()
 SpooferLeft:AddLabel("Head swap (experimental)", true)
-SpooferLeft:AddToggle("HeadDescEnabled", { Text = "Swap head via ApplyDescription", Default = false, Callback = function(v)
-	cfg.headDesc = v
+SpooferLeft:AddToggle("HeadDescEnabled", { Text = "Swap head (mesh + face)", Default = false, Callback = function(v)
+	cfg.headSwap = v
 	if v and lp.Character then
-		applyHeadViaDescription(lp.Character, cfg.userId)
+		swapHead(lp.Character, cfg.userId)
+	else
+		if lp.Character then restoreHead(lp.Character) end
 	end
 end })
 
 connect(lp.CharacterAdded, function(char)
 	task.delay(1, function()
 		if running and cfg.avatar then outfit(char, cfg.userId) end
-		if running and cfg.headDesc then task.wait(0.2); applyHeadViaDescription(char, cfg.userId) end
+		if running and cfg.headSwap then task.wait(0.2); swapHead(char, cfg.userId) end
 	end)
 end)
 
