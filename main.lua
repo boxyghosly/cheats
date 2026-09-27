@@ -1,12 +1,24 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
 local RunService = game:GetService("RunService")
 
--- EDIT THIS to your own GitHub repo (Library.lua at root, addons in /addons/)
 local repo = "https://raw.githubusercontent.com/boxyghosly/cheats/main/"
 
-local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
-local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
-local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+local function fetch(name)
+	local ok, result = pcall(function()
+		return loadstring(game:HttpGet(repo .. name))()
+	end)
+	if ok then return result end
+	return nil
+end
+
+local Library = fetch("Library.lua")
+local ThemeManager = fetch("ThemeManager.lua")
+local SaveManager = fetch("SaveManager.lua")
+
+if not (Library and ThemeManager and SaveManager) then
+	warn("Failed to load library files - check the repo URL and that Library.lua, ThemeManager.lua and SaveManager.lua are uploaded.")
+	return
+end
 
 local Options = getgenv().Options
 local Toggles = getgenv().Toggles
