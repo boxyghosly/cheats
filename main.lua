@@ -306,56 +306,53 @@ local function swapHead(char, userId)
 		end
 		if not running or not char.Parent then headSwapBusy[userId] = nil; return end
 		local sourceHead = rig:FindFirstChild("Head")
-		local oldHead = char:FindFirstChild("Head") or char:FindFirstChild("HitboxHead")
-		if not sourceHead or not oldHead then headSwapBusy[userId] = nil; return end
-		local neckJoint = nil
-		for _, d in ipairs(char:GetDescendants()) do
-			if d.Name == "Neck" and d:IsA("Motor6D") then neckJoint = d; break end
+		local liveHead = char:FindFirstChild("Head")
+		if not sourceHead or not liveHead then headSwapBusy[userId] = nil; return end
+		local srcMesh, srcTex = nil, nil
+		pcall(function() srcMesh = sourceHead.MeshId; srcTex = sourceHead.TextureID end)
+		if not srcMesh or srcMesh == "" then headSwapBusy[userId] = nil; return end
+		local bk = headBackups[char]
+		if not bk then
+			bk = {}
+			pcall(function() bk.meshId = liveHead.MeshId; bk.textureId = liveHead.TextureID end)
+			local dhm = liveHead:FindFirstChild("DefaultHeadMesh")
+			if dhm then
+				bk.dhmTransparency = dhm.Transparency
+				local dec = dhm:FindFirstChild("Decal")
+				if dec then bk.decTransparency = dec.Transparency end
+			end
+			headBackups[char] = bk
 		end
-		local newHead = sourceHead:Clone()
-		newHead.Name = oldHead.Name
-		for _, d in ipairs(newHead:GetDescendants()) do
-			if d:IsA("Motor6D") or d.Name == "Neck" then pcall(function() d:Destroy() end) end
+		pcall(function()
+			liveHead.MeshId = srcMesh
+			if srcTex and srcTex ~= "" then liveHead.TextureID = srcTex end
+		end)
+		local dhm = liveHead:FindFirstChild("DefaultHeadMesh")
+		if dhm then
+			pcall(function() dhm.Transparency = 1 end)
+			local dec = dhm:FindFirstChild("Decal")
+			if dec then pcall(function() dec.Transparency = 1 end) end
 		end
-		newHead.Anchored = oldHead.Anchored
-		newHead.CanCollide = oldHead.CanCollide
-		pcall(function() newHead.CFrame = oldHead.CFrame end)
-		local weldTo = nil
-		if neckJoint then weldTo = neckJoint.Part0 end
-		if not weldTo or weldTo == oldHead then weldTo = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") end
-		newHead.Parent = char
-		pcall(function() oldHead.Parent = nil end)
-		if weldTo and newHead:IsA("BasePart") then
-			pcall(function()
-				local w = Instance.new("Weld")
-				w.Name = "Neck"
-				w.Part0 = weldTo
-				w.Part1 = newHead
-				w.C0 = neckJoint and neckJoint.C0 or CFrame.new(0, 1, 0)
-				w.C1 = neckJoint and neckJoint.C1 or CFrame.new(0, -0.5, 0)
-				w.Parent = newHead
-			end)
-		end
-		headBackups[char] = { head = oldHead }
 		headSwapBusy[userId] = nil
-		if running and cfg.avatar and char.Parent then
-			task.wait(0.2)
-			outfit(char, cfg.userId)
-		end
-		if running then notify("Head swapped.") end
+		if running then notify("Head applied.") end
 	end)
 end
 
 local function restoreHead(char)
 	local bk = headBackups[char]
 	if not bk then return end
-	if char.Parent and bk.head then
-		for _, d in ipairs(char:GetChildren()) do
-			if (d.Name == "Head" or d.Name == "HitboxHead") and d ~= bk.head then
-				pcall(function() d.Parent = nil end)
-			end
+	local liveHead = char:FindFirstChild("Head")
+	if liveHead then
+		pcall(function()
+			if bk.meshId then liveHead.MeshId = bk.meshId end
+			if bk.textureId then liveHead.TextureID = bk.textureId end
+		end)
+		local dhm = liveHead:FindFirstChild("DefaultHeadMesh")
+		if dhm then
+			pcall(function() dhm.Transparency = bk.dhmTransparency or 0 end)
+			local dec = dhm:FindFirstChild("Decal")
+			if dec then pcall(function() dec.Transparency = bk.decTransparency or 0 end) end
 		end
-		pcall(function() bk.head.Parent = char end)
 	end
 	headBackups[char] = nil
 end
@@ -365,7 +362,12 @@ end
 SpooferLeft:AddLabel("Copies clothing, accessories and face; keeps body geometry.", true)
 SpooferLeft:AddInput("ExtraAvatarUserId", { Text = "Avatar user ID", Default = tostring(lp.UserId), Numeric = true, Finished = true, Callback = function(v)
 	local id = tonumber(v)
-	if id and id > 0 and id % 1 == 0 then cfg.userId = id; if cfg.avatar then outfit(lp.Character, cfg.userId) end; refreshProfileImages() end
+	if id and id > 0 and id % 1 == 0 then
+		cfg.userId = id
+		if cfg.avatar then outfit(lp.Character, cfg.userId) end
+		if cfg.headSwap and lp.Character then swapHead(lp.Character, cfg.userId) end
+		refreshProfileImages()
+	end
 end })
 SpooferLeft:AddToggle("ExtraAvatarEnabled", { Text = "Enable local outfit", Default = false, Callback = function(v)
 	cfg.avatar = v
@@ -396,7 +398,11 @@ end)
 
 table.insert(restorers, function()
 	cfg.avatar = false
-	if lp.Character then restoreCharacter(lp.Character) end
+	cfg.headSwap = false
+	if lp.Character then
+		restoreCharacter(lp.Character)
+		restoreHead(lp.Character)
+	end
 	for _, rig in pairs(rigs) do pcall(function() rig:Destroy() end) end
 end)
 
@@ -608,8 +614,54 @@ local function unpinAll()
 	for k in pairs(_pinConns) do names[#names + 1] = k end
 	for _, k in ipairs(names) do unpinAttr(k) end
 end
+
+-- CustomLeaderstats folder drives the Roblox top-right playerlist
+local _clCreated = false
+local _clOrig = {}
+local function clSync()
+	local w = nil
+	if running then
+		if Spoof.LevelEnabled then w = w or {}; w["Level"] = math.floor(tonumber(Spoof.Level) or 100) end
+		if Spoof.EloEnabled then w = w or {}; w["Current ELO"] = math.floor(tonumber(Spoof.Elo) or 2400) end
+		if Spoof.WinStreakEnabled then w = w or {}; w["Win Streak"] = math.floor(tonumber(Spoof.WinStreak) or 25) end
+	end
+	local folder = lp:FindFirstChild("CustomLeaderstats")
+	if not w then
+		if folder then
+			if _clCreated then
+				pcall(function() folder:Destroy() end)
+				_clCreated = false
+			else
+				for name, val in pairs(_clOrig) do
+					local iv = folder:FindFirstChild(name)
+					if iv then pcall(function() iv.Value = val end) end
+				end
+			end
+		end
+		_clOrig = {}
+		return
+	end
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "CustomLeaderstats"
+		folder.Parent = lp
+		_clCreated = true
+	end
+	for name, v in pairs(w) do
+		local iv = folder:FindFirstChild(name)
+		if not iv then
+			iv = Instance.new("IntValue")
+			iv.Name = name
+			iv.Parent = folder
+		elseif _clOrig[name] == nil then
+			_clOrig[name] = iv.Value
+		end
+		if iv.Value ~= v then pcall(function() iv.Value = v end) end
+	end
+end
+
 local function updatePlayerSpoofer()
-	if not anySpoofOn() then unpinAll(); return end
+	if not anySpoofOn() then unpinAll(); clSync(); return end
 	pcall(function()
 		local sLev = tonumber(Spoof.Level) or 100
 		local sElo = tonumber(Spoof.Elo) or 2400
@@ -656,6 +708,7 @@ local function updatePlayerSpoofer()
 		end
 		if Spoof.FavMapEnabled then pinAttr("FavoriteMap", sMap) else unpinAttr("FavoriteMap") end
 	end)
+	clSync()
 end
 
 -- Thumbnail image spoof (profile card picture)
@@ -778,7 +831,22 @@ mapDep:AddInput("SpooferFavoriteMap", { Default = "Arena", Text = "Map name", Fi
 end })
 mapDep:SetupDependencies({ { Toggles.SpooferFavoriteMapEnabled, true } })
 
+connect(game:GetService("RunService").Heartbeat, function()
+	local now = tick()
+	if not clSync._last or (now - clSync._last) > 2 then
+		clSync._last = now
+		pcall(clSync)
+	end
+end)
+
 table.insert(restorers, function()
+	if _clCreated then
+		pcall(function()
+			local folder = lp:FindFirstChild("CustomLeaderstats")
+			if folder then folder:Destroy() end
+		end)
+		_clCreated = false
+	end
 	for obj, saved in pairs(imgTracked) do
 		if saved.connection then pcall(function() saved.connection:Disconnect() end) end
 		if obj.Parent and type(saved.original) == "string" then
