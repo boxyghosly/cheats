@@ -170,6 +170,16 @@ local function restoreCharacter(char)
 	end
 	if char.Parent then
 		for part, color in pairs(saved.colors) do if part.Parent then pcall(function() part.Color = color end) end end
+		if saved.oldHeadMeshId then
+			local head = char:FindFirstChild("Head") or char:FindFirstChild("HitboxHead")
+			if head and head:IsA("MeshPart") then
+				pcall(function()
+					head.MeshId = saved.oldHeadMeshId
+					head.TextureID = saved.oldHeadTextureId or ""
+					if saved.oldHeadSize then head.Size = saved.oldHeadSize end
+				end)
+			end
+		end
 	end
 	backups[char] = nil
 end
@@ -195,10 +205,24 @@ local function outfit(char, userId)
 			if clothing(obj) then saved.removed[#saved.removed + 1] = { object = obj, parent = char }; obj.Parent = nil end
 			if obj:IsA("BasePart") then saved.colors[obj] = obj.Color end
 		end
-		local head = char:FindFirstChild("Head")
-		if head then
+		local head = char:FindFirstChild("Head") or char:FindFirstChild("HitboxHead")
+		local sourceHead = rig:FindFirstChild("Head")
+		if head and sourceHead then
+				saved.colors[head] = head.Color
+				if head:IsA("MeshPart") and sourceHead:IsA("MeshPart") then
+					pcall(function()
+						saved.oldHeadMeshId = head.MeshId
+						saved.oldHeadTextureId = head.TextureID
+						saved.oldHeadSize = head.Size
+						head.MeshId = sourceHead.MeshId
+						head.TextureID = sourceHead.TextureID
+						head.Size = sourceHead.Size
+					end)
+				end
 			for _, obj in ipairs(head:GetChildren()) do
-				if obj:IsA("Decal") then saved.removed[#saved.removed + 1] = { object = obj, parent = head }; obj.Parent = nil end
+				if obj:IsA("Decal") or obj:IsA("SurfaceAppearance") or obj:IsA("SpecialMesh") or obj:IsA("Texture") then
+					saved.removed[#saved.removed + 1] = { object = obj, parent = head }; obj.Parent = nil
+				end
 			end
 		end
 		for _, obj in ipairs(rig:GetChildren()) do
@@ -234,10 +258,11 @@ local function outfit(char, userId)
 				end
 			end
 		end
-		local sourceHead = rig:FindFirstChild("Head")
 		if head and sourceHead then
 			for _, obj in ipairs(sourceHead:GetChildren()) do
-				if obj:IsA("Decal") then local copy = obj:Clone(); copy.Parent = head; saved.added[#saved.added + 1] = copy end
+				if obj:IsA("Decal") or obj:IsA("SurfaceAppearance") or obj:IsA("SpecialMesh") or obj:IsA("Texture") then
+					local copy = obj:Clone(); copy.Parent = head; saved.added[#saved.added + 1] = copy
+				end
 			end
 		end
 	end)
