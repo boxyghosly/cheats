@@ -278,6 +278,67 @@ applyRigToChar = function(char, rig, generation)
 	end
 end
 
+local descBusy = {}
+local function applyHeadViaDescription(char, userId)
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum then
+		if running then notify("ApplyDescription unavailable: no Humanoid found.") end
+		return
+	end
+	if descBusy[userId] then return end
+	descBusy[userId] = true
+	if running then notify("Applying head via HumanoidDescription...") end
+	task.spawn(function()
+		local target = nil
+		local th = task.spawn(function()
+			local ok, v = pcall(function() return Players:GetHumanoidDescriptionFromUserId(userId) end)
+			if ok then target = v end
+		end)
+		local ticks, TIMEOUT = 0, 80
+		while not target and running do
+			task.wait(0.1)
+			ticks = ticks + 1
+			if ticks > TIMEOUT then break end
+		end
+		descBusy[userId] = nil
+		if not target then
+			if th then pcall(function() task.cancel(th) end) end
+			if running then notify("Head fetch took too long, cancelled.") end
+			return
+		end
+		if not running or not char.Parent then return end
+		local ok = pcall(function()
+			local mine = hum:GetAppliedDescription()
+			local new = Instance.new("HumanoidDescription")
+			local fields = {
+				"BackAccessory","Face","FaceAccessory","FrontAccessory","GraphicTShirt",
+				"HairAccessory","HatAccessory","NeckAccessory","Pants","Shirt",
+				"ShouldersAccessory","WaistAccessory","ClimbAnimation","FallAnimation",
+				"IdleAnimation","JumpAnimation","RunAnimation","SwimAnimation","WalkAnimation",
+				"DepthScale","HeightScale","WidthScale","BodyTypeScale","ProportionScale",
+			}
+			for _, f in ipairs(fields) do
+				local okk, v = pcall(function() return mine[f] end)
+				if okk and v ~= nil then pcall(function() new[f] = v end) end
+			end
+			-- Override only the head from the target
+			if target.Head then new.Head = target.Head end
+			-- Dynamic heads sometimes assume the target's head scale; try it
+			local _, hs = pcall(function() return nil, target.HeadScale end)
+			if hs ~= nil then pcall(function() new.HeadScale = hs end) end
+			hum:ApplyDescription(new)
+		end)
+		if not ok then
+			if running then notify("ApplyDescription failed or is blocked in this game.") end
+			return
+		end
+		if running and cfg.avatar and char.Parent then
+			task.wait(0.3)
+			outfit(char, cfg.userId)
+		end
+	end)
+end
+
 
 
 SpooferLeft:AddLabel("Copies clothing, accessories and face; keeps body geometry.", true)
@@ -294,10 +355,19 @@ SpooferLeft:AddToggle("ExtraAvatarEnabled", { Text = "Enable local outfit", Defa
 	end
 	refreshProfileImages()
 end })
+SpooferLeft:AddDivider()
+SpooferLeft:AddLabel("Head swap (experimental)", true)
+SpooferLeft:AddToggle("HeadDescEnabled", { Text = "Swap head via ApplyDescription", Default = false, Callback = function(v)
+	cfg.headDesc = v
+	if v and lp.Character then
+		applyHeadViaDescription(lp.Character, cfg.userId)
+	end
+end })
 
 connect(lp.CharacterAdded, function(char)
 	task.delay(1, function()
 		if running and cfg.avatar then outfit(char, cfg.userId) end
+		if running and cfg.headDesc then task.wait(0.2); applyHeadViaDescription(char, cfg.userId) end
 	end)
 end)
 
