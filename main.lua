@@ -2,7 +2,6 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local lp = Players.LocalPlayer
-local workspace = workspace
 
 local running = true
 local connections, restorers = {}, {}
@@ -11,7 +10,7 @@ local function connect(signal, fn)
 	table.insert(connections, c)
 	return c
 end
-local notify
+	local notify
 
 local repo = "https://raw.githubusercontent.com/boxyghosly/cheats/main/"
 
@@ -150,94 +149,9 @@ Tab2:AddToggle("Tab2Toggle", {
 local VisualsRight = Tabs.Visuals:AddRightGroupbox("Visuals right")
 VisualsRight:AddLabel("Placeholder groupbox. Add your controls here.", true)
 
--- Spoofer tab: names, thumbnails and local outfit preview
-local SpooferLeft = Tabs.Spoofer:AddLeftGroupbox("Names and thumbnails")
-local SpooferRight = Tabs.Spoofer:AddRightGroupbox("Local outfit preview")
-
-local cfg = { anonymous=false, avatar=false, userId=lp.UserId, display=false, username=false, displayName=lp.DisplayName, userName=lp.Name }
-local tracked = setmetatable({}, { __mode = "k" })
-local fakeNames = {}
-local refresh, refreshAvatars
-
-local function replacePlain(text, old, new)
-	if old == "" then return text end
-	local pattern = old:gsub("([^%w])", "%%%1")
-	return (text:gsub(pattern, function() return new end))
-end
-
-local function desiredText(original)
-	local text = original
-	if cfg.anonymous then
-		for _, player in ipairs(Players:GetPlayers()) do
-			if not fakeNames[player.UserId] then fakeNames[player.UserId] = "Player" .. tostring(player.UserId % 100000) end
-			text = replacePlain(text, player.DisplayName, fakeNames[player.UserId])
-			text = replacePlain(text, player.Name, fakeNames[player.UserId])
-		end
-	else
-		if cfg.display then text = replacePlain(text, lp.DisplayName, cfg.displayName) end
-		if cfg.username then text = replacePlain(text, lp.Name, cfg.userName) end
-	end
-	return text
-end
-
-local function applyObject(obj, saved)
-	if not obj.Parent or saved.writing then return end
-	local value = saved.original
-	if saved.property == "Text" then
-		value = desiredText(value)
-	else
-		if cfg.anonymous then
-			for _, player in ipairs(Players:GetPlayers()) do
-				value = value:gsub("%f[%d]" .. tostring(player.UserId) .. "%f[%D]", "6942067")
-			end
-		elseif cfg.avatar then
-			value = value:gsub("%f[%d]" .. tostring(lp.UserId) .. "%f[%D]", tostring(cfg.userId))
-		end
-	end
-	if obj[saved.property] ~= value then
-		saved.writing = true; obj[saved.property] = value; saved.writing = false
-	end
-end
-
-local function register(obj)
-	if tracked[obj] then return end
-	local property
-	if obj:IsA("TextLabel") or obj:IsA("TextButton") then property = "Text"
-	elseif obj:IsA("ImageLabel") or obj:IsA("ImageButton") then property = "Image" end
-	if not property then return end
-	local saved = { property = property, original = obj[property] }
-	tracked[obj] = saved
-	saved.connection = obj:GetPropertyChangedSignal(property):Connect(function()
-		if saved.writing then return end
-		saved.original = obj[property]
-		applyObject(obj, saved)
-	end)
-	applyObject(obj, saved)
-end
-
-local roots = {}
-local function scan()
-	local gui = lp:FindFirstChildOfClass("PlayerGui")
-	for _, root in ipairs({ gui, workspace }) do
-		if root and not roots[root] then
-			roots[root] = true
-			for _, obj in ipairs(root:GetDescendants()) do register(obj) end
-			connect(root.DescendantAdded, register)
-		end
-	end
-end
-
-refresh = function()
-	scan()
-	for obj, saved in pairs(tracked) do applyObject(obj, saved) end
-end
-
-SpooferLeft:AddInput("ExtraDisplayName", { Text = "Display name", Default = lp.DisplayName, Finished = true, Callback = function(v) cfg.displayName = v; refresh() end })
-SpooferLeft:AddToggle("ExtraDisplayNameEnabled", { Text = "Override display name", Default = false, Callback = function(v) cfg.display = v; refresh() end })
-SpooferLeft:AddInput("ExtraUsername", { Text = "Username", Default = lp.Name, Finished = true, Callback = function(v) cfg.userName = v; refresh() end })
-SpooferLeft:AddToggle("ExtraUsernameEnabled", { Text = "Override username", Default = false, Callback = function(v) cfg.username = v; refresh() end })
-
-SpooferRight:AddLabel("Copies clothing, accessories and face; keeps body geometry.", true)
+-- Spoofer tab: local outfit preview
+local SpooferLeft = Tabs.Spoofer:AddLeftGroupbox("Avatar outfit")
+local cfg = { avatar=false, userId=lp.UserId }
 
 local backups = setmetatable({}, { __mode = "k" })
 local generations = setmetatable({}, { __mode = "k" })
@@ -272,7 +186,7 @@ local function outfit(char, userId)
 			if not ok then if running then notify("Avatar preview unavailable: " .. tostring(value)) end; return end
 			rig = value
 			if not running then pcall(function() rig:Destroy() end); return end
-			if rigs[userId] then rig:Destroy(); rig = rigs[userId] else rigs[userId] = rig end
+			if rigs[userId] then pcall(function() rig:Destroy() end); rig = rigs[userId] else rigs[userId] = rig end
 		end
 		if not running or not char.Parent or generations[char] ~= generation then return end
 		local saved = { removed = {}, added = {}, colors = {} }
@@ -329,42 +243,32 @@ local function outfit(char, userId)
 	end)
 end
 
-refreshAvatars = function()
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player.Character then
-			outfit(player.Character, cfg.anonymous and 6942067 or (player == lp and cfg.avatar and cfg.userId or nil))
-		end
-	end
-end
-
-SpooferRight:AddInput("ExtraAvatarUserId", { Text = "Avatar user ID", Default = tostring(lp.UserId), Numeric = true, Finished = true, Callback = function(v)
+SpooferLeft:AddLabel("Copies clothing, accessories and face; keeps body geometry.", true)
+SpooferLeft:AddInput("ExtraAvatarUserId", { Text = "Avatar user ID", Default = tostring(lp.UserId), Numeric = true, Finished = true, Callback = function(v)
 	local id = tonumber(v)
-	if id and id > 0 and id % 1 == 0 then cfg.userId = id; if cfg.avatar then refreshAvatars(); refresh() end end
+	if id and id > 0 and id % 1 == 0 then cfg.userId = id; if cfg.avatar then outfit(lp.Character, cfg.userId) end end
 end })
-SpooferRight:AddToggle("ExtraAvatarEnabled", { Text = "Enable local outfit", Default = false, Callback = function(v) cfg.avatar = v; refreshAvatars(); refresh() end })
-SpooferLeft:AddToggle("ExtraAnonymous", { Text = "Anonymous names, thumbnails and outfits", Default = false, Callback = function(v)
-	cfg.anonymous = v; refresh(); refreshAvatars()
+SpooferLeft:AddToggle("ExtraAvatarEnabled", { Text = "Enable local outfit", Default = false, Callback = function(v)
+	cfg.avatar = v
+	if v and lp.Character then
+		outfit(lp.Character, cfg.userId)
+	else
+		if lp.Character then restoreCharacter(lp.Character) end
+	end
 end })
 
-local function watch(player)
-	connect(player.CharacterAdded, function(char)
-		task.delay(0.5, function()
-			if running then outfit(char, cfg.anonymous and 6942067 or (player == lp and cfg.avatar and cfg.userId or nil)) end
-		end)
+connect(lp.CharacterAdded, function(char)
+	task.delay(1, function()
+		if running and cfg.avatar then outfit(char, cfg.userId) end
 	end)
-end
-for _, player in ipairs(Players:GetPlayers()) do watch(player) end
-connect(Players.PlayerAdded, function(player) watch(player); if cfg.anonymous then refresh() end end)
+end)
 
 table.insert(restorers, function()
-	cfg.anonymous = false; cfg.avatar = false; cfg.display = false; cfg.username = false
-	for obj, saved in pairs(tracked) do
-		if saved.connection then pcall(function() saved.connection:Disconnect() end) end
-		if obj.Parent then pcall(function() obj[saved.property] = saved.original end) end
-	end
-	for char in pairs(backups) do restoreCharacter(char) end
+	cfg.avatar = false
+	if lp.Character then restoreCharacter(lp.Character) end
 	for _, rig in pairs(rigs) do pcall(function() rig:Destroy() end) end
 end)
+
 
 -- Misc tab
 local MiscGroup = Tabs.Misc:AddLeftGroupbox("Misc")
