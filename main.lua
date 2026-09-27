@@ -126,6 +126,437 @@ RightGroup:AddButton({
 	end,
 })
 
+RightGroup:AddDivider()
+
+-- Skin changer: unlock all cosmetics (client-side only)
+local SkinChanger = { want = false, busy = false }
+do
+	local http = game:GetService("HttpService")
+	local reps = game:GetService("ReplicatedStorage")
+	local lps = lp.PlayerScripts
+
+	local elib, clib, ilib, dctrl, fctrl, citem, cvm, cent, vpmod
+	local coss
+	local equip, favs, fcache, finv = {}, {}, {}, {}
+	local cwep, vprof, lwep
+	local oget, ogetwep, ocvm, ogw, onew, ogvi, ofetch, ofin, onc
+	local hooked = false
+
+	local savef = "SkinChanger/config.json"
+
+	local function banned(n)
+		if type(n) ~= "string" then return true end
+		return n:find("MISSING_") or n:find("Bubblegum") or n:find("Ragdoll") or n:find("Fall Apart") or n:find("Every Finisher Ever")
+	end
+
+	local function toenum(n)
+		if not elib then return nil end
+		local ok, id = pcall(elib.ToEnum, elib, n)
+		return ok and id or nil
+	end
+
+	local function clonecos(name, ctype, inv, favonly)
+		if banned(name) then return nil end
+		local base = coss[name]
+		if not base then return nil end
+		local d = table.clone(base)
+		d.Name = name
+		d.Type = d.Type or ctype
+		d.Seed = d.Seed or math.random(1, 1000000)
+		local eid = toenum(name)
+		if eid then
+			d.Enum = eid
+			d.ObjectID = d.ObjectID or eid
+		end
+		if inv ~= nil then d.Inverted = inv end
+		if favonly ~= nil then d.OnlyUseFavorites = favonly end
+		return d
+	end
+
+	local function savecfg()
+		if not writefile then return end
+		pcall(function()
+			local cfg = { equipped = {}, favorites = favs }
+			for wep, cos in equip do
+				local slot = {}
+				cfg.equipped[wep] = slot
+				for ct, cd in cos do
+					if cd and cd.Name and not banned(cd.Name) then
+						slot[ct] = { name = cd.Name, seed = cd.Seed, inverted = cd.Inverted }
+					end
+				end
+			end
+			makefolder("SkinChanger")
+			writefile(savef, http:JSONEncode(cfg))
+		end)
+	end
+
+	local function loadcfg()
+		if not readfile or not isfile or not isfile(savef) then return end
+		pcall(function()
+			local cfg = http:JSONDecode(readfile(savef))
+			if cfg.equipped then
+				for wep, cos in cfg.equipped do
+					equip[wep] = {}
+					for ct, cd in cos do
+						if not banned(cd.name) then
+							local cl = clonecos(cd.name, ct, cd.inverted)
+							if cl then
+								cl.Seed = cd.seed
+								equip[wep][ct] = cl
+							end
+						end
+					end
+				end
+			end
+			favs = cfg.favorites or {}
+		end)
+	end
+
+	local function rebuildinv()
+		table.clear(finv)
+		for name in coss do
+			if not banned(name) then finv[name] = true end
+		end
+		for _, cos in equip do
+			for _, cd in cos do
+				if cd and cd.Name and not banned(cd.Name) then finv[cd.Name] = true end
+			end
+		end
+	end
+
+	local function saferep(key)
+		if not dctrl then return end
+		pcall(function()
+			local cdata = dctrl.CurrentData
+			if cdata then cdata:Replicate(key) end
+		end)
+	end
+
+	local function getewep()
+		if not fctrl then return nil end
+		local fighter = fctrl:GetFighter(lp)
+		if not fighter or not fighter.Items then return nil end
+		for _, item in fighter.Items do
+			if item.IsEquipped then return item.Name end
+		end
+		return nil
+	end
+
+	local function init()
+		if dctrl then return true end
+		local rmods = reps:FindFirstChild("Modules")
+		local ctrls = lps:FindFirstChild("Controllers")
+		if not (rmods and ctrls) then return false end
+		pcall(function() elib = require(rmods:WaitForChild("EnumLibrary", 10)) end)
+		if elib then pcall(function() elib:WaitForEnumBuilder() end) end
+		local clibOk, clibRes = pcall(function() return require(rmods:WaitForChild("CosmeticLibrary", 10)) end)
+		local ilibOk, ilibRes = pcall(function() return require(rmods:WaitForChild("ItemLibrary", 10)) end)
+		local dctrlOk, dctrlRes = pcall(function() return require(ctrls:WaitForChild("PlayerDataController", 10)) end)
+		if not (clibOk and clibRes and ilibOk and ilibRes and dctrlOk and dctrlRes) then return false end
+		clib, ilib, dctrl = clibRes, ilibRes, dctrlRes
+		coss = clib.Cosmetics
+		if not coss then return false end
+		pcall(function() fctrl = require(ctrls:WaitForChild("FighterController", 10)) end)
+		pcall(function() citem = require(lps.Modules.ClientReplicatedClasses.ClientFighter.ClientItem) end)
+		pcall(function()
+			local vmmod = lps.Modules.ClientReplicatedClasses.ClientFighter.ClientItem:FindFirstChild("ClientViewModel")
+			if vmmod then cvm = require(vmmod) end
+		end)
+		pcall(function() cent = require(lps.Modules.ClientReplicatedClasses.ClientEntity) end)
+		pcall(function() vpmod = require(lps.Modules.Pages.ViewProfile) end)
+		return true
+	end
+
+	local function enable()
+		if not init() then return false end
+		if hooked then return true end
+		hooked = true
+
+		oget = dctrl.Get
+		dctrl.Get = function(self, key)
+			local data = oget(self, key)
+			if key == "CosmeticInventory" then
+				local proxy = {}
+				if data then
+					for k, v in data do
+						if not banned(k) then proxy[k] = v end
+					end
+				end
+				for name in finv do proxy[name] = true end
+				return proxy
+			end
+			if key == "FavoritedCosmetics" then
+				local res = data and table.clone(data) or {}
+				for wep, fv in favs do
+					local slot = res[wep] or {}
+					res[wep] = slot
+					for name, isfav in fv do
+						if not banned(name) then slot[name] = isfav end
+					end
+				end
+				return res
+			end
+			return data
+		end
+
+		ogetwep = dctrl.GetWeaponData
+		dctrl.GetWeaponData = function(self, wname)
+			local data = ogetwep(self, wname)
+			if not data then return nil end
+			local merged = table.clone(data)
+			merged.Name = wname
+			local weq = equip[wname]
+			if weq then
+				for ct, cd in weq do merged[ct] = cd end
+			end
+			return merged
+		end
+
+		if hookmetamethod and getnamecallmethod then
+			local rems = reps:FindFirstChild("Remotes")
+			local drems = rems and rems:FindFirstChild("Data")
+			local eqrem = drems and drems:FindFirstChild("EquipCosmetic")
+			local favrem = drems and drems:FindFirstChild("FavoriteCosmetic")
+			local rrems = rems and rems:FindFirstChild("Replication")
+			local frems = rrems and rrems:FindFirstChild("Fighter")
+			local uirem = frems and frems:FindFirstChild("UseItem")
+
+			onc = hookmetamethod(game, "__namecall", function(self, ...)
+				if getnamecallmethod() ~= "FireServer" then return onc(self, ...) end
+				local args = { ... }
+
+				if uirem and self == uirem and fctrl then
+					pcall(function()
+						local fighter = fctrl:GetFighter(lp)
+						if fighter and fighter.Items then
+							local oid = args[1]
+							for _, item in fighter.Items do
+								if item:Get("ObjectID") == oid then
+									lwep = item.Name
+									break
+								end
+							end
+						end
+					end)
+				end
+
+				if self == eqrem then
+					local wname, ctype, cname, opts = args[1], args[2], args[3], args[4] or {}
+					if not cname or cname == "None" or cname == "" then
+						equip[wname] = equip[wname] or {}
+						equip[wname][ctype] = nil
+						if not next(equip[wname]) then equip[wname] = nil end
+						rebuildinv()
+						task.defer(function()
+							saferep("WeaponInventory")
+							task.wait(0.2)
+							savecfg()
+						end)
+						return onc(self, ...)
+					end
+					if banned(cname) then return onc(self, ...) end
+					local rdata = oget(dctrl, "CosmeticInventory")
+					if rdata and type(rdata[cname]) ~= "boolean" and rdata[cname] ~= nil then
+						return onc(self, ...)
+					end
+					equip[wname] = equip[wname] or {}
+					local cloned = clonecos(cname, ctype, opts.IsInverted, opts.OnlyUseFavorites)
+					if cloned then equip[wname][ctype] = cloned end
+					if ctype == "Finisher" then fcache[wname] = cname end
+					rebuildinv()
+					task.defer(function()
+						saferep("WeaponInventory")
+						task.wait(0.2)
+						savecfg()
+					end)
+					return
+				end
+
+				if self == favrem then
+					local fwep, fname, fstate = args[1], args[2], args[3]
+					if not fname or fname == "None" or fname == "" then return onc(self, ...) end
+					if banned(fname) then return onc(self, ...) end
+					favs[fwep] = favs[fwep] or {}
+					favs[fwep][fname] = fstate or nil
+					savecfg()
+					task.spawn(saferep, "FavoritedCosmetics")
+					return
+				end
+
+				return onc(self, ...)
+			end)
+		end
+
+		if citem and citem._CreateViewModel then
+			ocvm = citem._CreateViewModel
+			citem._CreateViewModel = function(self, vmref)
+				local wname = self.Name
+				local wplr = self.ClientFighter and self.ClientFighter.Player
+				cwep = (wplr == lp) and wname or nil
+				if wplr == lp and equip[wname] and equip[wname].Skin and vmref then
+					local skin = equip[wname].Skin
+					local dk = self:ToEnum("Data")
+					if vmref[dk] then
+						vmref[dk][self:ToEnum("Skin")] = skin
+						vmref[dk][self:ToEnum("Name")] = skin.Name
+					elseif vmref.Data then
+						vmref.Data.Skin = skin
+						vmref.Data.Name = skin.Name
+					end
+				end
+				local res = ocvm(self, vmref)
+				cwep = nil
+				return res
+			end
+		end
+
+		if cvm then
+			if cvm.GetWrap then
+				ogw = cvm.GetWrap
+				cvm.GetWrap = function(self)
+					local ci = self.ClientItem
+					local wname = ci and ci.Name
+					local wplr = ci and ci.ClientFighter and ci.ClientFighter.Player
+					local weq = wname and wplr == lp and equip[wname]
+					return (weq and weq.Wrap) or ogw(self)
+				end
+			end
+			onew = cvm.new
+			cvm.new = function(rdata, cliitm)
+				local wplr = cliitm.ClientFighter and cliitm.ClientFighter.Player
+				local wname = cwep or cliitm.Name
+				if wplr == lp and equip[wname] then
+					pcall(function()
+						local rcls = require(reps.Modules.ReplicatedClass)
+						local dk = rcls:ToEnum("Data")
+						rdata[dk] = rdata[dk] or {}
+						local cos = equip[wname]
+						local slot = rdata[dk]
+						if cos.Skin then slot[rcls:ToEnum("Skin")] = cos.Skin end
+						if cos.Wrap then slot[rcls:ToEnum("Wrap")] = cos.Wrap end
+						if cos.Charm then slot[rcls:ToEnum("Charm")] = cos.Charm end
+					end)
+				end
+				local res = onew(rdata, cliitm)
+				if wplr == lp and equip[wname] and equip[wname].Wrap and res._UpdateWrap then
+					res:_UpdateWrap()
+					task.delay(0.1, function() if not res._destroyed then res:_UpdateWrap() end end)
+				end
+				return res
+			end
+		end
+
+		if ilib and ilib.GetViewModelImageFromWeaponData then
+			ogvi = ilib.GetViewModelImageFromWeaponData
+			ilib.GetViewModelImageFromWeaponData = function(self, wdata, hires)
+				if not wdata then return ogvi(self, wdata, hires) end
+				local wname = wdata.Name
+				local weq = equip[wname]
+				if weq and weq.Skin and (wdata.Skin == weq.Skin or vprof == lp) then
+					local sinfo = self.ViewModels[weq.Skin.Name]
+					if sinfo then return sinfo[hires and "ImageHighResolution" or "Image"] or sinfo.Image end
+				end
+				return ogvi(self, wdata, hires)
+			end
+		end
+
+		if vpmod and vpmod.Fetch then
+			ofetch = vpmod.Fetch
+			vpmod.Fetch = function(self, tplr)
+				vprof = tplr
+				return ofetch(self, tplr)
+			end
+		end
+
+		if cent and cent._PlayFinisher then
+			ofin = cent._PlayFinisher
+			cent._PlayFinisher = function(self, fname, ...)
+				local ewep = getewep()
+				local tfin = ewep and (fcache[ewep] or (equip[ewep] and equip[ewep].Finisher and equip[ewep].Finisher.Name))
+				return ofin(self, tfin or fname, ...)
+			end
+		end
+
+		loadcfg()
+		rebuildinv()
+		for wname, wdata in equip do
+			if wdata.Finisher and wdata.Finisher.Name then
+				fcache[wname] = wdata.Finisher.Name
+			end
+		end
+		saferep("CosmeticInventory")
+		saferep("FavoritedCosmetics")
+		saferep("WeaponInventory")
+		return true
+	end
+
+	local function disable()
+		if onc then
+			pcall(function() hookmetamethod(game, "__namecall", onc) end)
+			onc = nil
+		end
+		if citem and ocvm then citem._CreateViewModel = ocvm; ocvm = nil end
+		if cvm then
+			if ogw then cvm.GetWrap = ogw; ogw = nil end
+			if onew then cvm.new = onew; onew = nil end
+		end
+		if ilib and ogvi then ilib.GetViewModelImageFromWeaponData = ogvi; ogvi = nil end
+		if vpmod and ofetch then vpmod.Fetch = ofetch; ofetch = nil end
+		if cent and ofin then cent._PlayFinisher = ofin; ofin = nil end
+		if dctrl then
+			if oget then dctrl.Get = oget; oget = nil end
+			if ogetwep then dctrl.GetWeaponData = ogetwep; ogetwep = nil end
+		end
+		table.clear(equip)
+		table.clear(fcache)
+		table.clear(finv)
+		cwep, vprof, lwep = nil, nil, nil
+		hooked = false
+		saferep("CosmeticInventory")
+		saferep("FavoritedCosmetics")
+		saferep("WeaponInventory")
+	end
+
+	SkinChanger.enable = enable
+	SkinChanger.disable = disable
+end
+
+RightGroup:AddToggle("UnlockAllSkins", {
+	Text = "Unlock all skins",
+	Default = false,
+	Callback = function(Value)
+		SkinChanger.want = Value
+		if Value then
+			if SkinChanger.busy then return end
+			SkinChanger.busy = true
+			task.spawn(function()
+				local ok = SkinChanger.enable()
+				SkinChanger.busy = false
+				if not ok then
+					if SkinChanger.want then
+						notify("Skin changer failed to load (wrong game or still loading - try again)")
+						Toggles.UnlockAllSkins:SetValue(false)
+					end
+					return
+				end
+				if not SkinChanger.want then
+					SkinChanger.disable()
+					return
+				end
+				notify("All cosmetics unlocked (local only)")
+			end)
+		else
+			SkinChanger.disable()
+		end
+	end,
+})
+
+table.insert(restorers, function()
+	SkinChanger.want = false
+	pcall(SkinChanger.disable)
+end)
+
 -- Visuals tab (tabbox example)
 local TabBox = Tabs.Visuals:AddLeftTabbox()
 local Tab1 = TabBox:AddTab("Tab 1")
