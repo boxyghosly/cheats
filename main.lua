@@ -538,8 +538,7 @@ do
 			end
 		end
 
-		if ilib and ilib.GetViewModelImageFromWeaponData then
-			ogvi = ilib.GetViewModelImageFromWeaponData
+		if ilib and ilib.GetViewModelImageFromWeaponData then			ogvi = ilib.GetViewModelImageFromWeaponData
 			ilib.GetViewModelImageFromWeaponData = function(self, wdata, hires)
 				if not SkinChanger.want or not wdata then return ogvi(self, wdata, hires) end
 				local wname = wdata.Name
@@ -570,6 +569,30 @@ do
 			end
 		end
 
+		-- Hook ReplicatedClass:Get so weapon effects/projectiles read equipped skins
+		local orclsget
+		pcall(function()
+			local rcls = require(reps.Modules.ReplicatedClass)
+			local skinEnum = rcls:ToEnum("Skin")
+			local wrapEnum = rcls:ToEnum("Wrap")
+			local charmEnum = rcls:ToEnum("Charm")
+			orclsget = rcls.Get
+			rcls.Get = function(self, key)
+				local value = orclsget(self, key)
+				if not SkinChanger.want then return value end
+				local wname = self.Name
+				if not wname then return value end
+				local wplr = self.ClientFighter and self.ClientFighter.Player
+				if wplr ~= lp then return value end
+				local weq = equip[wname]
+				if not weq then return value end
+				if (key == skinEnum or key == "Skin") and weq.Skin then return weq.Skin end
+				if (key == wrapEnum or key == "Wrap") and weq.Wrap then return weq.Wrap end
+				if (key == charmEnum or key == "Charm") and weq.Charm then return weq.Charm end
+				return value
+			end
+		end)
+
 		loadcfg()
 		rebuildinv()
 		for wname, wdata in equip do
@@ -596,6 +619,13 @@ do
 		if ilib and ogvi then ilib.GetViewModelImageFromWeaponData = ogvi; ogvi = nil end
 		if vpmod and ofetch then vpmod.Fetch = ofetch; ofetch = nil end
 		if cent and ofin then cent._PlayFinisher = ofin; ofin = nil end
+		if orclsget then
+			pcall(function()
+				local rcls = require(reps.Modules.ReplicatedClass)
+				rcls.Get = orclsget
+			end)
+			orclsget = nil
+		end
 		if dctrl then
 			if oget then dctrl.Get = oget; oget = nil end
 			if ogetwep then dctrl.GetWeaponData = ogetwep; ogetwep = nil end
