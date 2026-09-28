@@ -14,10 +14,25 @@ end
 	local notify
 
 local repo = "https://raw.githubusercontent.com/boxyghosly/cheats/main/"
+local libCache = "MyScriptHub/libcache"
 
 local function fetch(name)
-	local ok, result = pcall(function()
-		return loadstring(game:HttpGet(repo .. name))()
+	local path = libCache .. "/" .. name
+	local ok, result
+	if isfile and isfile(path) then
+		ok, result = pcall(function() return loadstring(readfile(path))() end)
+		if ok then return result end
+	end
+	ok, result = pcall(function()
+		local src = game:HttpGet(repo .. name)
+		if writefile then
+			pcall(function()
+				if not (isfolder and isfolder("MyScriptHub")) then makefolder("MyScriptHub") end
+				if not (isfolder and isfolder(libCache)) then makefolder(libCache) end
+				writefile(path, src)
+			end)
+		end
+		return loadstring(src)()
 	end)
 	if ok then return result end
 	return nil
