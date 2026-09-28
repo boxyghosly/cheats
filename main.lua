@@ -1262,10 +1262,11 @@ mapDep:AddInput("SpooferFavoriteMap", { Default = "Arena", Text = "Map name", Fi
 end })
 mapDep:SetupDependencies({ { Toggles.SpooferFavoriteMapEnabled, true } })
 
+local clSyncLast = 0
 connect(game:GetService("RunService").Heartbeat, function()
 	local now = tick()
-	if not clSync._last or (now - clSync._last) > 2 then
-		clSync._last = now
+	if (now - clSyncLast) > 2 then
+		clSyncLast = now
 		pcall(clSync)
 	end
 end)
