@@ -16,12 +16,34 @@ end
 local repo = "https://raw.githubusercontent.com/boxyghosly/cheats/main/"
 local libCache = "MyScriptHub/libcache"
 
+local function applyCursorFix(src)
+	if not src or not src:find("GetMouseLocation", 1, true) then return src end
+	return src:gsub(
+		"local mPos = InputService:GetMouseLocation%(%);",
+		"local mPos = InputService:GetMouseLocation() - _cursorInset;"
+	):gsub(
+		"local ScreenGui = Instance",
+		"local _cursorInset = game:GetService('GuiService'):GetGuiInset()\nlocal ScreenGui = Instance"
+	)
+end
+
+local function loadSrc(src)
+	src = applyCursorFix(src)
+	return loadstring(src)()
+end
+
 local function fetch(name)
 	local path = libCache .. "/" .. name
 	local ok, result
 	if isfile and isfile(path) then
-		ok, result = pcall(function() return loadstring(readfile(path))() end)
-		if ok then return result end
+		local cached = readfile(path)
+		if cached and cached:find("GetMouseLocation", 1, true) then
+			ok, result = pcall(loadSrc, cached)
+			if ok then return result end
+		elseif cached then
+			ok, result = pcall(function() return loadstring(cached)() end)
+			if ok then return result end
+		end
 	end
 	ok, result = pcall(function()
 		local src = game:HttpGet(repo .. name)
@@ -32,7 +54,7 @@ local function fetch(name)
 				writefile(path, src)
 			end)
 		end
-		return loadstring(src)()
+		return loadSrc(src)
 	end)
 	if ok then return result end
 	return nil
@@ -45,10 +67,6 @@ local SaveManager = fetch("SaveManager.lua")
 if not (Library and ThemeManager and SaveManager) then
 	warn("Failed to load library files - check the repo URL and that Library.lua, ThemeManager.lua and SaveManager.lua are uploaded.")
 	return
-end
-
-if Library.ScreenGui then
-	Library.ScreenGui.IgnoreGuiInset = true
 end
 
 local Options = getgenv().Options
@@ -113,7 +131,6 @@ LeftGroup:AddLabel("Keybind example"):AddKeyPicker("ExampleKeybind", {
 	Text = "Example keybind",
 	NoUI = false,
 	Callback = function(Value)
-		print("[cb] ExampleKeybind:", Value)
 	end,
 })
 
