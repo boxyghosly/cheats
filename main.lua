@@ -4,6 +4,22 @@ local Players = game:GetService("Players")
 local lp = Players.LocalPlayer
 local cloneref = cloneref or function(x) return x end
 
+-- Kill any previous instance of this UI (prevents stacked instances / keybind ghosts)
+do
+	if getgenv().__MyUIPrevious then
+		pcall(function() getgenv().__MyUIPrevious:Unload() end)
+		getgenv().__MyUIPrevious = nil
+	end
+	pcall(function()
+		local root = (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
+		for _, g in ipairs(root:GetChildren()) do
+			if g:IsA("ScreenGui") and g.Name == "ScreenGui" and #g:GetChildren() > 5 then
+				g:Destroy()
+			end
+		end
+	end)
+end
+
 local running = true
 local connections, restorers = {}, {}
 local function connect(signal, fn)
@@ -46,6 +62,8 @@ if not (Library and ThemeManager and SaveManager) then
 	warn("Failed to load library files - check the repo URL and that Library.lua, ThemeManager.lua and SaveManager.lua are uploaded.")
 	return
 end
+
+getgenv().__MyUIPrevious = Library
 
 local Options = getgenv().Options
 local Toggles = getgenv().Toggles
