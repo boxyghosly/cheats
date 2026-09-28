@@ -169,7 +169,18 @@ do
 		end
 	end
 
+	local _wProxy, _wProxyAt, _wProxyLen = nil, 0, -1
+	local function invalidateWeapons()
+		_wProxy, _wProxyAt, _wProxyLen = nil, 0, -1
+	end
+
 	local function weaponProxy(data)
+		if not allWeapons then return data end
+		local dlen = type(data) == "table" and #data or 0
+		local now = tick()
+		if _wProxy and _wProxyLen == dlen and (now - _wProxyAt) < 1 then
+			return _wProxy
+		end
 		local proxy = {}
 		local n = 0
 		if type(data) == "table" then
@@ -188,6 +199,7 @@ do
 				proxy[n] = { Name = name, Level = 1, XP = 0, Prestige = 0 }
 			end
 		end
+		_wProxy, _wProxyAt, _wProxyLen = proxy, now, dlen
 		return proxy
 	end
 
@@ -262,6 +274,7 @@ do
 		end)
 	end
 
+	local _cProxy, _cProxyAt = nil, 0
 	local function rebuildinv()
 		table.clear(finv)
 		for name in coss do
@@ -272,6 +285,7 @@ do
 				if cd and cd.Name and not banned(cd.Name) then finv[cd.Name] = true end
 			end
 		end
+		_cProxy, _cProxyAt = nil, 0
 	end
 
 	local function saferep(key)
@@ -330,6 +344,10 @@ do
 				return weaponProxy(data)
 			end
 			if SkinChanger.want and key == "CosmeticInventory" then
+				local now = tick()
+				if _cProxy and (now - _cProxyAt) < 1 then
+					return _cProxy
+				end
 				local proxy = {}
 				if data then
 					for k, v in data do
@@ -337,6 +355,7 @@ do
 					end
 				end
 				for name in finv do proxy[name] = true end
+				_cProxy, _cProxyAt = proxy, now
 				return proxy
 			end
 			if SkinChanger.want and key == "FavoritedCosmetics" then
@@ -567,6 +586,8 @@ do
 		table.clear(fcache)
 		table.clear(finv)
 		cwep, vprof, lwep = nil, nil, nil
+		invalidateWeapons()
+		_cProxy, _cProxyAt = nil, 0
 		hooked = false
 		saferep("CosmeticInventory")
 		saferep("FavoritedCosmetics")
@@ -576,11 +597,15 @@ do
 	SkinChanger.enable = enable
 	SkinChanger.disable = disable
 	SkinChanger.refresh = function()
+		invalidateWeapons()
 		saferep("WeaponInventory")
 		if SkinChanger.want then
 			saferep("CosmeticInventory")
 			saferep("FavoritedCosmetics")
 		end
+	end
+	SkinChanger.invalidate = function()
+		invalidateWeapons()
 	end
 end
 
@@ -617,38 +642,6 @@ local function turnOff()
 		SkinChanger.refresh()
 	end
 end
-
-RightGroup:AddToggle("UnlockAllSkins", {
-	Text = "Unlock all skins",
-	Default = false,
-	Callback = function(Value)
-		SkinChanger.want = Value
-		if Value then
-			ensureSkinHooks("All cosmetics unlocked (local only)")
-		else
-			turnOff()
-		end
-	end,
-})
-
-RightGroup:AddToggle("UnlockAllWeapons", {
-	Text = "Unlock all weapons",
-	Default = false,
-	Callback = function(Value)
-		SkinChanger.weapons = Value
-		if Value then
-			ensureSkinHooks("All weapons unlocked (client-side)")
-		else
-			turnOff()
-		end
-	end,
-})
-
-table.insert(restorers, function()
-	SkinChanger.want = false
-	SkinChanger.weapons = false
-	pcall(SkinChanger.disable)
-end)
 
 -- Visuals tab (tabbox example)
 local TabBox = Tabs.Visuals:AddLeftTabbox()
@@ -1384,8 +1377,40 @@ end)
 
 
 -- Misc tab
-local MiscGroup = Tabs.Misc:AddLeftGroupbox("Misc")
-MiscGroup:AddLabel("Placeholder groupbox. Add your controls here.", true)
+local MiscGroup = Tabs.Misc:AddLeftGroupbox("Unlock All")
+MiscGroup:AddLabel("Client-side only. Server still validates real ownership.", true)
+
+MiscGroup:AddToggle("UnlockAllSkins", {
+	Text = "Unlock all skins",
+	Default = false,
+	Callback = function(Value)
+		SkinChanger.want = Value
+		if Value then
+			ensureSkinHooks("All cosmetics unlocked (local only)")
+		else
+			turnOff()
+		end
+	end,
+})
+
+MiscGroup:AddToggle("UnlockAllWeapons", {
+	Text = "Unlock all weapons",
+	Default = false,
+	Callback = function(Value)
+		SkinChanger.weapons = Value
+		if Value then
+			ensureSkinHooks("All weapons unlocked (client-side)")
+		else
+			turnOff()
+		end
+	end,
+})
+
+table.insert(restorers, function()
+	SkinChanger.want = false
+	SkinChanger.weapons = false
+	pcall(SkinChanger.disable)
+end)
 
 -- Watermark
 Library:SetWatermarkVisibility(true)
@@ -1396,18 +1421,23 @@ local function GetPing()
 end
 local CanDoPing = pcall(GetPing)
 
+local WmTimer, WmPing = tick(), 0
 local WatermarkConnection = RunService.RenderStepped:Connect(function()
 	FrameCounter += 1
-	if (tick() - FrameTimer) >= 1 then
+	local now = tick()
+	if (now - FrameTimer) >= 1 then
 		FPS = FrameCounter
-		FrameTimer = tick()
+		FrameTimer = now
 		FrameCounter = 0
 	end
-
-	if CanDoPing then
-		Library:SetWatermark(("My UI | %d fps | %d ms"):format(math.floor(FPS), GetPing()))
-	else
-		Library:SetWatermark(("My UI | %d fps"):format(math.floor(FPS)))
+	if (now - WmTimer) >= 0.25 then
+		WmTimer = now
+		if CanDoPing then
+			WmPing = GetPing()
+			Library:SetWatermark(("My UI | %d fps | %d ms"):format(math.floor(FPS), WmPing))
+		else
+			Library:SetWatermark(("My UI | %d fps"):format(math.floor(FPS)))
+		end
 	end
 end)
 
