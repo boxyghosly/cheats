@@ -143,7 +143,7 @@ RightGroup:AddButton({
 RightGroup:AddDivider()
 
 -- Skin changer: unlock all cosmetics (client-side only)
-local SkinChanger = { want = false, busy = false }
+local SkinChanger = { want = false, weapons = false, busy = false }
 do
 	local http = game:GetService("HttpService")
 	local reps = game:GetService("ReplicatedStorage")
@@ -155,6 +155,41 @@ do
 	local cwep, vprof, lwep
 	local oget, ogetwep, ocvm, ogw, onew, ogvi, ofetch, ofin, onc
 	local hooked = false
+	local allWeapons = nil
+
+	local function buildWeapons()
+		if allWeapons then return end
+		allWeapons = {}
+		if ilib and ilib.Items then
+			for name in ilib.Items do
+				if type(name) == "string" and name ~= "MISSING_WEAPON" then
+					allWeapons[#allWeapons + 1] = name
+				end
+			end
+		end
+	end
+
+	local function weaponProxy(data)
+		local proxy = {}
+		local n = 0
+		if type(data) == "table" then
+			for k, v in data do
+				proxy[k] = v
+				if type(k) == "number" and k > n then n = k end
+			end
+		end
+		local owned = {}
+		for _, v in pairs(proxy) do
+			if type(v) == "table" and type(v.Name) == "string" then owned[v.Name] = true end
+		end
+		for _, name in ipairs(allWeapons) do
+			if not owned[name] then
+				n = n + 1
+				proxy[n] = { Name = name, Level = 1, XP = 0, Prestige = 0 }
+			end
+		end
+		return proxy
+	end
 
 	local savef = "SkinChanger/config.json"
 
@@ -284,13 +319,17 @@ do
 
 	local function enable()
 		if not init() then return false end
+		buildWeapons()
 		if hooked then return true end
 		hooked = true
 
 		oget = dctrl.Get
 		dctrl.Get = function(self, key)
 			local data = oget(self, key)
-			if key == "CosmeticInventory" then
+			if SkinChanger.weapons and key == "WeaponInventory" and allWeapons then
+				return weaponProxy(data)
+			end
+			if SkinChanger.want and key == "CosmeticInventory" then
 				local proxy = {}
 				if data then
 					for k, v in data do
@@ -300,7 +339,7 @@ do
 				for name in finv do proxy[name] = true end
 				return proxy
 			end
-			if key == "FavoritedCosmetics" then
+			if SkinChanger.want and key == "FavoritedCosmetics" then
 				local res = data and table.clone(data) or {}
 				for wep, fv in favs do
 					local slot = res[wep] or {}
@@ -320,9 +359,9 @@ do
 			if not data then return nil end
 			local merged = table.clone(data)
 			merged.Name = wname
-			local weq = equip[wname]
-			if weq then
-				for ct, cd in weq do merged[ct] = cd end
+			if SkinChanger.want then
+				local weq = equip[wname]
+				if weq then for ct, cd in weq do merged[ct] = cd end end
 			end
 			return merged
 		end
@@ -338,6 +377,7 @@ do
 
 			onc = hookmetamethod(game, "__namecall", function(self, ...)
 				if getnamecallmethod() ~= "FireServer" then return onc(self, ...) end
+				if not SkinChanger.want then return onc(self, ...) end
 				local args = { ... }
 
 				if uirem and self == uirem and fctrl then
@@ -408,7 +448,7 @@ do
 				local wname = self.Name
 				local wplr = self.ClientFighter and self.ClientFighter.Player
 				cwep = (wplr == lp) and wname or nil
-				if wplr == lp and equip[wname] and equip[wname].Skin and vmref then
+				if SkinChanger.want and wplr == lp and equip[wname] and equip[wname].Skin and vmref then
 					local skin = equip[wname].Skin
 					local dk = self:ToEnum("Data")
 					if vmref[dk] then
@@ -432,7 +472,7 @@ do
 					local ci = self.ClientItem
 					local wname = ci and ci.Name
 					local wplr = ci and ci.ClientFighter and ci.ClientFighter.Player
-					local weq = wname and wplr == lp and equip[wname]
+					local weq = SkinChanger.want and wname and wplr == lp and equip[wname]
 					return (weq and weq.Wrap) or ogw(self)
 				end
 			end
@@ -440,7 +480,7 @@ do
 			cvm.new = function(rdata, cliitm)
 				local wplr = cliitm.ClientFighter and cliitm.ClientFighter.Player
 				local wname = cwep or cliitm.Name
-				if wplr == lp and equip[wname] then
+				if SkinChanger.want and wplr == lp and equip[wname] then
 					pcall(function()
 						local rcls = require(reps.Modules.ReplicatedClass)
 						local dk = rcls:ToEnum("Data")
@@ -453,7 +493,7 @@ do
 					end)
 				end
 				local res = onew(rdata, cliitm)
-				if wplr == lp and equip[wname] and equip[wname].Wrap and res._UpdateWrap then
+				if SkinChanger.want and wplr == lp and equip[wname] and equip[wname].Wrap and res._UpdateWrap then
 					res:_UpdateWrap()
 					task.delay(0.1, function() if not res._destroyed then res:_UpdateWrap() end end)
 				end
@@ -464,7 +504,7 @@ do
 		if ilib and ilib.GetViewModelImageFromWeaponData then
 			ogvi = ilib.GetViewModelImageFromWeaponData
 			ilib.GetViewModelImageFromWeaponData = function(self, wdata, hires)
-				if not wdata then return ogvi(self, wdata, hires) end
+				if not SkinChanger.want or not wdata then return ogvi(self, wdata, hires) end
 				local wname = wdata.Name
 				local weq = equip[wname]
 				if weq and weq.Skin and (wdata.Skin == weq.Skin or vprof == lp) then
@@ -486,6 +526,7 @@ do
 		if cent and cent._PlayFinisher then
 			ofin = cent._PlayFinisher
 			cent._PlayFinisher = function(self, fname, ...)
+				if not SkinChanger.want then return ofin(self, fname, ...) end
 				local ewep = getewep()
 				local tfin = ewep and (fcache[ewep] or (equip[ewep] and equip[ewep].Finisher and equip[ewep].Finisher.Name))
 				return ofin(self, tfin or fname, ...)
@@ -534,6 +575,47 @@ do
 
 	SkinChanger.enable = enable
 	SkinChanger.disable = disable
+	SkinChanger.refresh = function()
+		saferep("WeaponInventory")
+		if SkinChanger.want then
+			saferep("CosmeticInventory")
+			saferep("FavoritedCosmetics")
+		end
+	end
+end
+
+local function skinsOrWeaponsOn()
+	return SkinChanger.want or SkinChanger.weapons
+end
+
+local function ensureSkinHooks(okMsg)
+	if SkinChanger.busy then return end
+	SkinChanger.busy = true
+	task.spawn(function()
+		local ok = SkinChanger.enable()
+		SkinChanger.busy = false
+		if not ok then
+			if skinsOrWeaponsOn() then
+				notify("Skin changer failed to load (wrong game or still loading - try again)")
+				if SkinChanger.want then Toggles.UnlockAllSkins:SetValue(false) end
+				if SkinChanger.weapons then Toggles.UnlockAllWeapons:SetValue(false) end
+			end
+			return
+		end
+		if not skinsOrWeaponsOn() then
+			SkinChanger.disable()
+			return
+		end
+		if okMsg then notify(okMsg) end
+	end)
+end
+
+local function turnOff()
+	if not skinsOrWeaponsOn() then
+		SkinChanger.disable()
+	else
+		SkinChanger.refresh()
+	end
 end
 
 RightGroup:AddToggle("UnlockAllSkins", {
@@ -542,32 +624,29 @@ RightGroup:AddToggle("UnlockAllSkins", {
 	Callback = function(Value)
 		SkinChanger.want = Value
 		if Value then
-			if SkinChanger.busy then return end
-			SkinChanger.busy = true
-			task.spawn(function()
-				local ok = SkinChanger.enable()
-				SkinChanger.busy = false
-				if not ok then
-					if SkinChanger.want then
-						notify("Skin changer failed to load (wrong game or still loading - try again)")
-						Toggles.UnlockAllSkins:SetValue(false)
-					end
-					return
-				end
-				if not SkinChanger.want then
-					SkinChanger.disable()
-					return
-				end
-				notify("All cosmetics unlocked (local only)")
-			end)
+			ensureSkinHooks("All cosmetics unlocked (local only)")
 		else
-			SkinChanger.disable()
+			turnOff()
+		end
+	end,
+})
+
+RightGroup:AddToggle("UnlockAllWeapons", {
+	Text = "Unlock all weapons",
+	Default = false,
+	Callback = function(Value)
+		SkinChanger.weapons = Value
+		if Value then
+			ensureSkinHooks("All weapons unlocked (client-side)")
+		else
+			turnOff()
 		end
 	end,
 })
 
 table.insert(restorers, function()
 	SkinChanger.want = false
+	SkinChanger.weapons = false
 	pcall(SkinChanger.disable)
 end)
 
