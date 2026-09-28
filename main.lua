@@ -47,6 +47,10 @@ if not (Library and ThemeManager and SaveManager) then
 	return
 end
 
+if Library.ScreenGui then
+	Library.ScreenGui.IgnoreGuiInset = true
+end
+
 local Options = getgenv().Options
 local Toggles = getgenv().Toggles
 
