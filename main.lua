@@ -1578,6 +1578,7 @@ end
 -- 3600+ ELO that is not actually on the leaderboard. Override GetRank for our
 -- own userId while the ELO spoof is at/above the Nemesis threshold.
 local _origGetRank = nil
+local _origRankedUnlocked = nil
 local function installRankHook()
 	if _origGetRank then return end
 	local ok, slib = pcall(function() return require(RS2.Modules.SeasonLibrary) end)
@@ -1593,6 +1594,20 @@ local function installRankHook()
 		end
 		return r
 	end
+	-- ViewProfile hides the entire Rank frame when the account hasn't unlocked
+	-- ranked yet (duels won / level / account age / tasks requirements), so the
+	-- spoofed rank never shows on the profile card. Report ranked as unlocked
+	-- while the ELO spoof is on.
+	pcall(function()
+		local sctrl = require(game:GetService("Players").LocalPlayer.PlayerScripts.Controllers.SeasonController)
+		if type(sctrl) == "table" and sctrl.IsRankedUnlocked then
+			_origRankedUnlocked = sctrl.IsRankedUnlocked
+			sctrl.IsRankedUnlocked = function(self, ...)
+				if Spoof.EloEnabled then return true end
+				return _origRankedUnlocked(self, ...)
+			end
+		end
+	end)
 end
 
 local _origStatNC = nil
@@ -1621,6 +1636,13 @@ table.insert(restorers, function()
 			if ok and slib and _origGetRank then slib.GetRank = _origGetRank end
 		end)
 		_origGetRank = nil
+	end
+	if _origRankedUnlocked then
+		pcall(function()
+			local sctrl = require(game:GetService("Players").LocalPlayer.PlayerScripts.Controllers.SeasonController)
+			if sctrl and _origRankedUnlocked then sctrl.IsRankedUnlocked = _origRankedUnlocked end
+		end)
+		_origRankedUnlocked = nil
 	end
 	if _origStatNC then
 		pcall(function() hookmetamethod(game, "__namecall", _origStatNC) end)
