@@ -168,10 +168,10 @@ do
 	local lps = lp.PlayerScripts
 
 	local elib, clib, ilib, dctrl, fctrl, citem, cvm, cent, vpmod
-	local coss
+	local coss, scctrl
 	local equip, favs, fcache, finv = {}, {}, {}, {}
 	local cwep, vprof, lwep
-	local oget, ogetwep, ocvm, ogw, onew, ogvi, ofetch, ofin, onc
+	local oget, ogetwep, ocvm, ogw, onew, ogvi, ofetch, ofin, onc, oscadd
 	local hooked = false
 	local allWeapons = nil
 
@@ -412,8 +412,49 @@ do
 			local frems = rrems and rrems:FindFirstChild("Fighter")
 			local uirem = frems and frems:FindFirstChild("UseItem")
 
+			-- Weapon effect visuals (warper portals, distortion blackholes, molotov
+			-- fire, freeze ray/permafrost/spear tightropes, jump pads, smoke templates)
+			-- read their skin from the server-set "ViewModelName" attribute on the
+			-- server-spawned hitbox instance - they never call item:Get("Skin").
+			-- Spoof it: the server sends the base weapon name when no skin is equipped
+			-- server-side, so map weapon name -> equipped skin name.
+			local function effectIsMine(self)
+				local myId = lp.UserId
+				local v = self:GetAttribute("UserID")
+				if v ~= nil then return v == myId end
+				v = self:GetAttribute("OwnerUserID")
+				if v ~= nil then return v == myId end
+				local anc, hops = self.Parent, 0
+				while anc and hops < 4 do
+					v = anc:GetAttribute("UserID")
+					if v ~= nil then return v == myId end
+					v = anc:GetAttribute("OwnerUserID")
+					if v ~= nil then return v == myId end
+					anc, hops = anc.Parent, hops + 1
+				end
+				return true
+			end
+
 			onc = hookmetamethod(game, "__namecall", function(self, ...)
-				if getnamecallmethod() ~= "FireServer" then return onc(self, ...) end
+				local method = getnamecallmethod()
+				if method == "GetAttribute" then
+					local key = (...)
+					if SkinChanger.want and (key == "ViewModelName" or key == "Template") then
+						local real = onc(self, key)
+						if type(real) == "string" then
+							local weq = equip[real]
+							local sk = weq and weq.Skin
+							if sk and sk.Name then
+								local mine = false
+								pcall(function() mine = effectIsMine(self) end)
+								if mine then return sk.Name end
+							end
+						end
+						return real
+					end
+					return onc(self, ...)
+				end
+				if method ~= "FireServer" then return onc(self, ...) end
 				if not SkinChanger.want then return onc(self, ...) end
 				local args = { ... }
 
@@ -569,6 +610,29 @@ do
 			end
 		end
 
+		-- Smoke clouds pick their visual from the spawned part's NAME (the
+		-- skin's viewmodel name, e.g. "Hourglass"). For an unskinned owner the
+		-- server names the part after the base weapon, so rename it to our
+		-- equipped skin name.
+		pcall(function()
+			scctrl = require(lps.Modules.GameComponents.SmokeClouds)
+			if type(scctrl) == "table" and scctrl._ObjectAdded then
+				oscadd = scctrl._ObjectAdded
+				scctrl._ObjectAdded = function(s, part)
+					if SkinChanger.want then
+						pcall(function()
+							local weq = equip[part.Name]
+							local sk = weq and weq.Skin
+							if sk and sk.Name and part.Name ~= sk.Name then
+								part.Name = sk.Name
+							end
+						end)
+					end
+					return oscadd(s, part)
+				end
+			end
+		end)
+
 		-- Hook ReplicatedClass:Get so weapon effects/projectiles read equipped skins
 		local orclsget
 		pcall(function()
@@ -619,6 +683,10 @@ do
 		if ilib and ogvi then ilib.GetViewModelImageFromWeaponData = ogvi; ogvi = nil end
 		if vpmod and ofetch then vpmod.Fetch = ofetch; ofetch = nil end
 		if cent and ofin then cent._PlayFinisher = ofin; ofin = nil end
+		if scctrl and oscadd then
+			pcall(function() scctrl._ObjectAdded = oscadd end)
+			oscadd = nil
+		end
 		if orclsget then
 			pcall(function()
 				local rcls = require(reps.Modules.ReplicatedClass)
