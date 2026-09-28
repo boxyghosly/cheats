@@ -171,7 +171,7 @@ do
 	local coss, scctrl
 	local equip, favs, fcache, finv = {}, {}, {}, {}
 	local cwep, vprof, lwep
-	local oget, ogetwep, ocvm, ogw, onew, ogvi, ofetch, ofin, onc, oscadd
+	local oget, ogetwep, ocvm, ogw, onew, ogvi, ofetch, ofin, onc, oscadd, ofgw
 	local hooked = false
 	local allWeapons = nil
 
@@ -432,7 +432,22 @@ do
 					if v ~= nil then return v == myId end
 					anc, hops = anc.Parent, hops + 1
 				end
-				return true
+				-- Fire hitboxes, tightropes, jump pads: no UserID, but ObjectID
+				-- maps to a fighter's item — look up whose it is.
+				local oid = self:GetAttribute("ObjectID")
+				if oid ~= nil and fctrl then
+					local ok, mine = pcall(function()
+						for _, obj in pairs(fctrl.Objects) do
+							local it = obj:GetItem(oid)
+							if it then
+								return obj.Player == lp
+							end
+						end
+						return false
+					end)
+					return ok and mine or false
+				end
+				return false
 			end
 
 			onc = hookmetamethod(game, "__namecall", function(self, ...)
@@ -579,6 +594,31 @@ do
 			end
 		end
 
+		-- Fire hitboxes and jump pads apply wraps from FighterController:GetWrap(ObjectID)
+		-- (the viewmodel hook above doesn't cover these), so patch that funnel too.
+		if fctrl and fctrl.GetWrap then
+			ofgw = fctrl.GetWrap
+			fctrl.GetWrap = function(self, oid)
+				if SkinChanger.want then
+					local wwrap = nil
+					pcall(function()
+						local fighter = self:GetFighter(lp)
+						if fighter and fighter.Items then
+							for _, item in fighter.Items do
+								if item:Get("ObjectID") == oid then
+									local weq = equip[item.Name]
+									wwrap = weq and weq.Wrap
+									break
+								end
+							end
+						end
+					end)
+					if wwrap then return wwrap end
+				end
+				return ofgw(self, oid)
+			end
+		end
+
 		if ilib and ilib.GetViewModelImageFromWeaponData then			ogvi = ilib.GetViewModelImageFromWeaponData
 			ilib.GetViewModelImageFromWeaponData = function(self, wdata, hires)
 				if not SkinChanger.want or not wdata then return ogvi(self, wdata, hires) end
@@ -683,6 +723,7 @@ do
 		if ilib and ogvi then ilib.GetViewModelImageFromWeaponData = ogvi; ogvi = nil end
 		if vpmod and ofetch then vpmod.Fetch = ofetch; ofetch = nil end
 		if cent and ofin then cent._PlayFinisher = ofin; ofin = nil end
+		if fctrl and ofgw then fctrl.GetWrap = ofgw; ofgw = nil end
 		if scctrl and oscadd then
 			pcall(function() scctrl._ObjectAdded = oscadd end)
 			oscadd = nil
