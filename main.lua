@@ -1093,6 +1093,7 @@ local Spoof = {
 	WinPercentEnabled = false, WinPercent = 75,
 	WinStreakEnabled = false, WinStreak = 25,
 	FavMapEnabled = false, FavMap = "Arena",
+	ArchnemesisEnabled = false,
 }
 
 local _spooferActive = false
@@ -1500,10 +1501,138 @@ Profile:AddToggle("SpooferFavoriteMapEnabled", { Text = "Spoof favorite map", De
 	Spoof.FavMapEnabled = v; updatePlayerSpoofer()
 end })
 local mapDep = Profile:AddDependencyBox()
-mapDep:AddInput("SpooferFavoriteMap", { Default = "Arena", Text = "Map name", Finished = true, Callback = function(v)
-	Spoof.FavMap = tostring(v); updatePlayerSpoofer()
-end })
+local favMapList
+do
+	local ok, dlib = pcall(function() return require(game:GetService("ReplicatedStorage").Modules.DuelLibrary) end)
+	favMapList = {}
+	if ok and type(dlib) == "table" and type(dlib.Maps) == "table" then
+		for name in pairs(dlib.Maps) do favMapList[#favMapList + 1] = name end
+		table.sort(favMapList)
+	end
+	if #favMapList == 0 then favMapList = { "Arena" } end
+end
+mapDep:AddDropdown("SpooferFavoriteMap", {
+	Text = "Favorite map",
+	Values = favMapList,
+	Default = "Arena",
+	Multi = false,
+	Callback = function(v)
+		Spoof.FavMap = tostring(v); updatePlayerSpoofer()
+	end,
+})
 mapDep:SetupDependencies({ { Toggles.SpooferFavoriteMapEnabled, true } })
+
+-- Profile card (ViewProfile page) does NOT read the pinned player attributes:
+-- it requests the profile from the server via Remotes.Misc.RequestProfile and
+-- renders CasualWins / CasualWinPercent / RankedWins / RankedWinPercent /
+-- Level / FavoriteMap / RankedCurrentELO straight from that response. Hook the
+-- InvokeServer result for our own player and patch the table in place.
+local RS2 = game:GetService("ReplicatedStorage")
+local _reqProfile
+pcall(function()
+	local rem = RS2:FindFirstChild("Remotes")
+	local misc = rem and rem:FindFirstChild("Misc")
+	_reqProfile = misc and misc:FindFirstChild("RequestProfile") or nil
+end)
+
+local _statMaps = nil
+local function validMaps()
+	if _statMaps ~= nil then return _statMaps end
+	_statMaps = {}
+	local ok, dlib = pcall(function() return require(RS2.Modules.DuelLibrary) end)
+	if ok and type(dlib) == "table" and type(dlib.Maps) == "table" then
+		for name in pairs(dlib.Maps) do _statMaps[#_statMaps + 1] = name end
+		table.sort(_statMaps)
+	end
+	if #_statMaps == 0 then _statMaps = { "Arena" } end
+	return _statMaps
+end
+
+local function patchProfile(res)
+	if type(res) ~= "table" then return end
+	pcall(function()
+		-- keep the page from erroring on missing fields
+		res.CasualWins = res.CasualWins or 0
+		res.CasualWinPercent = res.CasualWinPercent or 0
+		res.RankedWins = res.RankedWins or 0
+		res.RankedWinPercent = res.RankedWinPercent or 0
+		res.FavoriteWeapons = res.FavoriteWeapons or {}
+		if Spoof.LevelEnabled then res.Level = math.floor(tonumber(Spoof.Level) or 100) end
+		if Spoof.CasualWinsEnabled then res.CasualWins = math.floor(tonumber(Spoof.CasualWins) or 500) end
+		if Spoof.RankedWinsEnabled then res.RankedWins = math.floor(tonumber(Spoof.RankedWins) or 250) end
+		if Spoof.WinPercentEnabled then
+			local frac = (tonumber(Spoof.WinPercent) or 75) / 100
+			res.CasualWinPercent = frac
+			res.RankedWinPercent = frac
+		end
+		if Spoof.EloEnabled then res.RankedCurrentELO = math.floor(tonumber(Spoof.Elo) or 2400) end
+		if Spoof.FavMapEnabled then
+			local m = tostring(Spoof.FavMap or "Arena")
+			if table.find(validMaps(), m) then res.FavoriteMap = m end
+		end
+	end)
+end
+
+-- Archnemesis is reserved for the top 200 Nemesis players on the global ELO
+-- leaderboard, so SeasonLibrary:GetRank returns plain "Nemesis" for a spoofed
+-- 3600+ ELO that is not actually on the leaderboard. Override GetRank for our
+-- own userId while the ELO spoof is at/above the Nemesis threshold.
+local _origGetRank = nil
+local function installRankHook()
+	if _origGetRank then return end
+	local ok, slib = pcall(function() return require(RS2.Modules.SeasonLibrary) end)
+	if not (ok and type(slib) == "table" and slib.GetRank) then return end
+	_origGetRank = slib.GetRank
+	slib.GetRank = function(self, elo, userId, ...)
+		local r = _origGetRank(self, elo, userId, ...)
+		if Spoof.EloEnabled and Spoof.ArchnemesisEnabled and userId == lp.UserId then
+			local e = tonumber(elo)
+			if e and e >= 3600 and (tonumber(Spoof.Elo) or 0) >= 3600 then
+				return "Archnemesis"
+			end
+		end
+		return r
+	end
+end
+
+local _origStatNC = nil
+local function installStatHooks()
+	if _origStatNC then return end
+	if not (hookmetamethod and getnamecallmethod) then return end
+	_origStatNC = hookmetamethod(game, "__namecall", function(self, ...)
+		local method = getnamecallmethod()
+		if method == "InvokeServer" and _reqProfile and self == _reqProfile then
+			local target = (...)
+			local res = _origStatNC(self, ...)
+			if target == lp then patchProfile(res) end
+			return res
+		end
+		return _origStatNC(self, ...)
+	end)
+end
+
+installStatHooks()
+installRankHook()
+
+table.insert(restorers, function()
+	if _origGetRank then
+		pcall(function()
+			local ok, slib = pcall(function() return require(RS2.Modules.SeasonLibrary) end)
+			if ok and slib and _origGetRank then slib.GetRank = _origGetRank end
+		end)
+		_origGetRank = nil
+	end
+	if _origStatNC then
+		pcall(function() hookmetamethod(game, "__namecall", _origStatNC) end)
+		_origStatNC = nil
+	end
+end)
+
+Profile:AddDivider()
+Profile:AddLabel("Rank display", true)
+Profile:AddToggle("SpooferArchnemesisEnabled", { Text = "Show Archnemesis (3600+ ELO)", Default = false, Callback = function(v)
+	Spoof.ArchnemesisEnabled = v; updatePlayerSpoofer()
+end })
 
 local clSyncLast = 0
 connect(game:GetService("RunService").Heartbeat, function()
