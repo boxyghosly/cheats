@@ -1,9 +1,4 @@
-local __T0 = os.clock()
-local function __lap(tag) print(("[boot] %-20s +%.1fms"):format(tag, (os.clock() - __T0) * 1000)) end
-__lap("script_start")
-
 if not game:IsLoaded() then game.Loaded:Wait() end
-__lap("game_loaded")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local lp = Players.LocalPlayer
@@ -24,7 +19,6 @@ do
 		end
 	end)
 end
-__lap("cleanup_done")
 
 local running = true
 local connections, restorers = {}, {}
@@ -36,7 +30,7 @@ end
 	local notify
 
 local repo = "https://raw.githubusercontent.com/boxyghosly/cheats/main/"
-local libCache = "MyScriptHub/libcache"
+local libCache = "SPOOFER/libcache"
 
 local function fetch(name)
 	local path = libCache .. "/" .. name
@@ -50,7 +44,7 @@ local function fetch(name)
 		local src = game:HttpGet(repo .. name)
 		if writefile then
 			pcall(function()
-				if not (isfolder and isfolder("MyScriptHub")) then makefolder("MyScriptHub") end
+				if not (isfolder and isfolder("SPOOFER")) then makefolder("SPOOFER") end
 				if not (isfolder and isfolder(libCache)) then makefolder(libCache) end
 				writefile(path, src)
 			end)
@@ -62,11 +56,8 @@ local function fetch(name)
 end
 
 local Library = fetch("Library.lua")
-__lap("fetched_Library")
 local ThemeManager = fetch("ThemeManager.lua")
-__lap("fetched_ThemeManager")
 local SaveManager = fetch("SaveManager.lua")
-__lap("fetched_SaveManager")
 
 if not (Library and ThemeManager and SaveManager) then
 	warn("Failed to load library files - check the repo URL and that Library.lua, ThemeManager.lua and SaveManager.lua are uploaded.")
@@ -92,7 +83,6 @@ local Window = Library:CreateWindow({
 	MinSize = Vector2.new(470, 380),
 	MaxSize = Vector2.new(740, 720),
 })
-__lap("window_created")
 
 local Tabs = {
 	Main = Window:AddTab("Main"),
@@ -101,7 +91,6 @@ local Tabs = {
 	Misc = Window:AddTab("Misc"),
 	["UI Settings"] = Window:AddTab("UI Settings"),
 }
-__lap("tabs_created")
 
 -- Main tab
 local LeftGroup = Tabs.Main:AddLeftGroupbox("Left groupbox")
@@ -233,7 +222,7 @@ do
 		return proxy
 	end
 
-	local savef = "SkinChanger/config.json"
+	local savef = "SPOOFER/SkinChanger/config.json"
 
 	local function banned(n)
 		if type(n) ~= "string" then return true end
@@ -277,7 +266,7 @@ do
 					end
 				end
 			end
-			makefolder("SkinChanger")
+			makefolder("SPOOFER/SkinChanger")
 			writefile(savef, http:JSONEncode(cfg))
 		end)
 	end
@@ -1515,9 +1504,7 @@ end })
 local mapDep = Profile:AddDependencyBox()
 local favMapList
 do
-	__lap("pre_duel_library")
-local ok, dlib = pcall(function() return require(game:GetService("ReplicatedStorage").Modules.DuelLibrary) end)
-__lap("post_duel_library")
+	local ok, dlib = pcall(function() return require(game:GetService("ReplicatedStorage").Modules.DuelLibrary) end)
 	favMapList = {}
 	if ok and type(dlib) == "table" and type(dlib.Maps) == "table" then
 		for name in pairs(dlib.Maps) do favMapList[#favMapList + 1] = name end
@@ -1641,9 +1628,7 @@ local function installStatHooks()
 end
 
 installStatHooks()
-__lap("stat_hooks_done")
 installRankHook()
-__lap("rank_hook_done")
 
 table.insert(restorers, function()
 	if _origGetRank then
@@ -1804,12 +1789,10 @@ SaveManager:SetLibrary(Library)
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
 
-ThemeManager:SetFolder("MyScriptHub")
-SaveManager:SetFolder("MyScriptHub/specific-game")
+ThemeManager:SetFolder("SPOOFER")
+SaveManager:SetFolder("SPOOFER")
 
 SaveManager:BuildConfigSection(Tabs["UI Settings"])
 ThemeManager:ApplyToTab(Tabs["UI Settings"])
 
 SaveManager:LoadAutoloadConfig()
-__lap("autoload_done")
-__lap("SCRIPT_DONE total")
