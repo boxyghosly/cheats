@@ -168,8 +168,9 @@ do
 	local reps = game:GetService("ReplicatedStorage")
 	local lps = lp.PlayerScripts
 
-	local elib, clib, ilib, dctrl, fctrl, citem, cvm, cent, vpmod
+	local elib, clib, ilib, dctrl, fctrl, citem, cvm, cent, vpmod, rcls
 	local coss, scctrl
+	local rclsEnums = {} -- cached ToEnum results, avoids repeated enum lookups in hot paths
 	local equip, favs, fcache, finv = {}, {}, {}, {}
 	local cwep, vprof, lwep
 	local oget, ogetwep, ocvm, ogw, onew, ogvi, ofetch, ofin, onc, oscadd, ofgw
@@ -347,6 +348,13 @@ do
 		end)
 		pcall(function() cent = require(lps.Modules.ClientReplicatedClasses.ClientEntity) end)
 		pcall(function() vpmod = require(lps.Modules.Pages.ViewProfile) end)
+		pcall(function()
+			rcls = require(reps.Modules.ReplicatedClass)
+			rclsEnums.Data = rcls:ToEnum("Data")
+			rclsEnums.Skin = rcls:ToEnum("Skin")
+			rclsEnums.Wrap = rcls:ToEnum("Wrap")
+			rclsEnums.Charm = rcls:ToEnum("Charm")
+		end)
 		return true
 	end
 
@@ -574,17 +582,16 @@ do
 			cvm.new = function(rdata, cliitm)
 				local wplr = cliitm.ClientFighter and cliitm.ClientFighter.Player
 				local wname = cwep or cliitm.Name
-				if SkinChanger.want and wplr == lp and equip[wname] then
-					pcall(function()
-						local rcls = require(reps.Modules.ReplicatedClass)
-						local dk = rcls:ToEnum("Data")
-						rdata[dk] = rdata[dk] or {}
-						local cos = equip[wname]
-						local slot = rdata[dk]
-						if cos.Skin then slot[rcls:ToEnum("Skin")] = cos.Skin end
-						if cos.Wrap then slot[rcls:ToEnum("Wrap")] = cos.Wrap end
-						if cos.Charm then slot[rcls:ToEnum("Charm")] = cos.Charm end
-					end)
+if SkinChanger.want and wplr == lp and equip[wname] then
+				pcall(function()
+					local dk = rclsEnums.Data
+					rdata[dk] = rdata[dk] or {}
+					local cos = equip[wname]
+					local slot = rdata[dk]
+					if cos.Skin then slot[rclsEnums.Skin] = cos.Skin end
+					if cos.Wrap then slot[rclsEnums.Wrap] = cos.Wrap end
+					if cos.Charm then slot[rclsEnums.Charm] = cos.Charm end
+				end)
 				end
 				local res = onew(rdata, cliitm)
 				if SkinChanger.want and wplr == lp and equip[wname] and equip[wname].Wrap and res._UpdateWrap then
@@ -676,11 +683,10 @@ do
 
 		-- Hook ReplicatedClass:Get so weapon effects/projectiles read equipped skins
 		local orclsget
-		pcall(function()
-			local rcls = require(reps.Modules.ReplicatedClass)
-			local skinEnum = rcls:ToEnum("Skin")
-			local wrapEnum = rcls:ToEnum("Wrap")
-			local charmEnum = rcls:ToEnum("Charm")
+		if rcls then
+			local skinEnum = rclsEnums.Skin
+			local wrapEnum = rclsEnums.Wrap
+			local charmEnum = rclsEnums.Charm
 			orclsget = rcls.Get
 			rcls.Get = function(self, key)
 				local value = orclsget(self, key)
@@ -693,10 +699,10 @@ do
 				if not weq then return value end
 				if (key == skinEnum or key == "Skin") and weq.Skin then return weq.Skin end
 				if (key == wrapEnum or key == "Wrap") and weq.Wrap then return weq.Wrap end
-				if (key == charmEnum or key == "Charm") and weq.Charm then return weq.Charm end
-				return value
-			end
-		end)
+			if (key == charmEnum or key == "Charm") and weq.Charm then return weq.Charm end
+			return value
+		end
+	end
 
 		loadcfg()
 		rebuildinv()
@@ -729,13 +735,10 @@ do
 			pcall(function() scctrl._ObjectAdded = oscadd end)
 			oscadd = nil
 		end
-		if orclsget then
-			pcall(function()
-				local rcls = require(reps.Modules.ReplicatedClass)
-				rcls.Get = orclsget
-			end)
-			orclsget = nil
-		end
+if orclsget then
+		if rcls then pcall(function() rcls.Get = orclsget end) end
+		orclsget = nil
+	end
 		if dctrl then
 			if oget then dctrl.Get = oget; oget = nil end
 			if ogetwep then dctrl.GetWeaponData = ogetwep; ogetwep = nil end
@@ -1337,7 +1340,8 @@ local function clSync()
 end
 
 local function updatePlayerSpoofer()
-	if not anySpoofOn() then unpinAll(); clSync(); return end
+	if not anySpoofOn() then unpinAll(); clSync(); ensureClSync(false); return end
+	ensureClSync(true)
 	pcall(function()
 		local sLev = tonumber(Spoof.Level) or 100
 		local sElo = tonumber(Spoof.Elo) or 2400
@@ -1385,6 +1389,7 @@ local function updatePlayerSpoofer()
 		if Spoof.FavMapEnabled then pinAttr("FavoriteMap", sMap) else unpinAttr("FavoriteMap") end
 	end)
 	clSync()
+	ensureClSync(true)
 end
 
 -- Thumbnail image spoof (profile card picture)
@@ -1501,17 +1506,21 @@ wsDep:SetupDependencies({ { Toggles.SpooferWinStreakEnabled, true } })
 Profile:AddToggle("SpooferFavoriteMapEnabled", { Text = "Spoof favorite map", Default = false, Callback = function(v)
 	Spoof.FavMapEnabled = v; updatePlayerSpoofer()
 end })
-local mapDep = Profile:AddDependencyBox()
-local favMapList
-do
+local _mapList = nil
+local function validMaps()
+	if _mapList ~= nil then return _mapList end
+	_mapList = {}
 	local ok, dlib = pcall(function() return require(game:GetService("ReplicatedStorage").Modules.DuelLibrary) end)
-	favMapList = {}
 	if ok and type(dlib) == "table" and type(dlib.Maps) == "table" then
-		for name in pairs(dlib.Maps) do favMapList[#favMapList + 1] = name end
-		table.sort(favMapList)
+		for name in pairs(dlib.Maps) do _mapList[#_mapList + 1] = name end
+		table.sort(_mapList)
 	end
-	if #favMapList == 0 then favMapList = { "Arena" } end
+	if #_mapList == 0 then _mapList = { "Arena" } end
+	return _mapList
 end
+
+local mapDep = Profile:AddDependencyBox()
+local favMapList = validMaps()
 mapDep:AddDropdown("SpooferFavoriteMap", {
 	Text = "Favorite map",
 	Values = favMapList,
@@ -1535,19 +1544,6 @@ pcall(function()
 	local misc = rem and rem:FindFirstChild("Misc")
 	_reqProfile = misc and misc:FindFirstChild("RequestProfile") or nil
 end)
-
-local _statMaps = nil
-local function validMaps()
-	if _statMaps ~= nil then return _statMaps end
-	_statMaps = {}
-	local ok, dlib = pcall(function() return require(RS2.Modules.DuelLibrary) end)
-	if ok and type(dlib) == "table" and type(dlib.Maps) == "table" then
-		for name in pairs(dlib.Maps) do _statMaps[#_statMaps + 1] = name end
-		table.sort(_statMaps)
-	end
-	if #_statMaps == 0 then _statMaps = { "Arena" } end
-	return _statMaps
-end
 
 local function patchProfile(res)
 	if type(res) ~= "table" then return end
@@ -1658,13 +1654,22 @@ Profile:AddToggle("SpooferArchnemesisEnabled", { Text = "Show Archnemesis (3600+
 end })
 
 local clSyncLast = 0
-connect(game:GetService("RunService").Heartbeat, function()
+local clSyncConn
+local function clSyncLoop()
 	local now = tick()
 	if (now - clSyncLast) > 2 then
 		clSyncLast = now
 		pcall(clSync)
 	end
-end)
+end
+local function ensureClSync(active)
+	if active and not clSyncConn then
+		clSyncConn = connect(game:GetService("RunService").Heartbeat, clSyncLoop)
+	elseif not active and clSyncConn then
+		pcall(function() clSyncConn:Disconnect() end)
+		clSyncConn = nil
+	end
+end
 
 table.insert(restorers, function()
 	if _clCreated then
