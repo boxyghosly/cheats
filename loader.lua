@@ -1,13 +1,23 @@
+-- loader.lua - tiny entry point, caches the big script
 local url = "https://raw.githubusercontent.com/boxyghosly/cheats/main/main.lua"
-local cache = "MyScriptHub/main.lua"
+local cache = "SPOOFER/main.lua"
 
-if not isfolder("MyScriptHub") then makefolder("MyScriptHub") end
+if not (isfolder and isfolder("SPOOFER")) then makefolder("SPOOFER") end
 
 local src = isfile(cache) and readfile(cache) or nil
-if src then loadstring(src)() end
+local ran = false
+if src then
+	ran = pcall(loadstring(src))
+end
 
 task.spawn(function()
-    local fresh = game:HttpGet(url)
-    writefile(cache, fresh)
-    if not src then loadstring(fresh)() end
+	local ok, fresh = pcall(game.HttpGet, game, url)
+	if ok and type(fresh) == "string" and #fresh > 0 then
+		if fresh ~= src then
+			writefile(cache, fresh)
+		end
+		if not ran then
+			loadstring(fresh)()
+		end
+	end
 end)
